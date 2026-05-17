@@ -1,0 +1,10 @@
+{
+  "name": "domain-inbox",
+  "private": true,
+  "packageManager": "pnpm@10.6.3",
+  "scripts": {
+    "worker:dev": "pnpm --filter @domain-inbox/worker run dev",
+    "worker:deploy:dev": "pnpm --filter @domain-inbox/worker run deploy:dev",
+    "worker:tail:dev": "pnpm --filter @domain-inbox/worker run tail:dev"
+  }
+}

@@ -1,0 +1,13 @@
+{
+  "name": "@domain-inbox/scripts",
+  "private": true,
+  "version": "0.0.0",
+  "type": "module",
+  "scripts": {
+    "resend-compat": "node resend-compat-smoke.mjs"
+  },
+  "dependencies": {
+    "resend": "^6.1.2",
+    "svix": "^1.40.0"
+  }
+}

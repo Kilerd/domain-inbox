@@ -1,0 +1,75 @@
+# Cloudflare Worker: domain-inbox
+# Single Worker hosting fetch (API + Static Assets), email handler, queue consumers.
+#
+# Environments:
+#   - top-level (no --env): unused; reserved to force explicit env selection
+#   - dev:      domain-inbox-dev      — bound to PRIMARY_DOMAIN for real receive/send tests
+#   - staging:  domain-inbox-staging  — pre-prod
+#   - prod:     domain-inbox-prod     — production
+#
+# Bindings (D1/R2/KV/EMAIL/Queues/Assets) are added per cycle. C0.1 keeps it empty.
+
+name = "domain-inbox"
+main = "src/index.ts"
+compatibility_date = "2026-05-15"
+compatibility_flags = ["nodejs_compat"]
+account_id = "<your-cloudflare-account-id>"
+
+# Default env is intentionally minimal; deploys must pass --env <name>.
+
+[env.dev]
+name = "domain-inbox-dev"
+workers_dev = true
+
+[env.dev.vars]
+ENV = "dev"
+WORKER_NAME = "domain-inbox-dev"
+PRIMARY_DOMAIN = "<your-domain.com>"
+APP_BASE_URL = "https://domain-inbox-dev.<your-workers-subdomain>.workers.dev"
+
+# Dev backdoor — only activates when the request carries `X-Dev-Auth: $DEV_USER_TOKEN`.
+# The token is provisioned via `wrangler secret put DEV_USER_TOKEN --env dev` so it
+# is *not* publicly known. Without it, dev deployment behaves like prod (requires login).
+DEV_USER_EMAIL = "dev@example.com"
+DEV_USER_NAME = "Dev User"
+
+# Once Access is configured, uncomment these:
+# ACCESS_TEAM_DOMAIN = "<your-team>"
+# ACCESS_AUD = "<application-aud-tag>"
+
+[[env.dev.d1_databases]]
+binding = "DB"
+database_name = "domain-inbox-dev"
+database_id = "<your-d1-database-id>"
+migrations_dir = "migrations"
+
+[[env.dev.r2_buckets]]
+binding = "R2"
+bucket_name = "domain-inbox-dev"
+
+[[env.dev.kv_namespaces]]
+binding = "KV"
+id = "<your-kv-namespace-id>"
+
+[env.dev.assets]
+directory = "../web/dist"
+binding = "ASSETS"
+not_found_handling = "single-page-application"
+# Force /api/* through the Worker first, never let the SPA index.html fallback
+# intercept dynamic API paths (which leaks 200 HTML responses + CF edge cache).
+# /t/* is the open+click tracking surface — same SPA-fallback caveat applies.
+run_worker_first = ["/api/*", "/t/*"]
+
+# Cloudflare Email Sending binding. On Workers Paid this can send to any recipient;
+# on Free it's limited to verified destinations. Requires the user has enabled
+# Email Sending on at least one verified domain in their Cloudflare account.
+[[env.dev.send_email]]
+name = "EMAIL"
+
+[env.staging]
+name = "domain-inbox-staging"
+workers_dev = true
+
+[env.prod]
+name = "domain-inbox-prod"
+workers_dev = true

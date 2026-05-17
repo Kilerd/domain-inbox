@@ -1,0 +1,10 @@
+node_modules
+.wrangler
+.dev.vars
+.dev.vars.*
+dist
+*.tsbuildinfo
+.DS_Store
+*.log
+.vscode
+.idea
