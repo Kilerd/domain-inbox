@@ -1,7 +1,34 @@
 # domain-inbox
 
-Multi-domain email service on Cloudflare. Receive any address on your domains,
-send via a Resend-compatible HTTP API, manage everything from a single web UI.
+**Domain email + Resend alternative, powered by Cloudflare.** Receive mail on
+any address across any number of your domains, send transactional email through
+a drop-in [Resend](https://resend.com)-compatible HTTP API, and manage
+everything from a single web UI — all on one Cloudflare Worker.
+
+## Drop-in Resend replacement
+
+Already using the official Resend SDK? Point it at this Worker with one
+environment variable — **no SDK swap, no code changes**:
+
+```ts
+// Node / Bun / Deno — works with the unmodified `resend` package
+import { Resend } from "resend";
+
+process.env.RESEND_BASE_URL = "https://domain-inbox.<your-subdomain>.workers.dev/api/v1";
+const resend = new Resend(process.env.RESEND_API_KEY); // re_live_xxx minted in the SPA
+
+await resend.emails.send({
+  from: "hello@your-domain.com",
+  to:   ["someone@example.com"],
+  subject: "Hi from my own infra",
+  html: "<p>Sent through Cloudflare Email Sending.</p>",
+});
+```
+
+Same idempotency keys, batch endpoint, `GET /emails/:id`, webhooks signed with
+Svix-compatible HMAC — all verified against the official Resend Node SDK and
+the official Svix verifier (see `scripts/resend-compat-smoke.mjs` and
+`scripts/webhook-signature-check.mjs`).
 
 ## Deploy to your own Cloudflare account
 
@@ -61,8 +88,6 @@ RESEND_BASE_URL=https://domain-inbox-dev.<your-subdomain>.workers.dev/api/v1 \
   node scripts/resend-compat-smoke.mjs
 ```
 
-See [CHECKLIST.md](./CHECKLIST.md) for the one-time CF Email Routing/Sending
-manual setup that requires `email_routing:write` OAuth scope.
-
-The full implementation plan is at
-`/Users/chenxin/.claude/plans/cloudflare-worker-keen-tome.md`.
+See [DEPLOY.md](./DEPLOY.md) for the full deploy walkthrough and
+[CHECKLIST.md](./CHECKLIST.md) for the one-time Cloudflare Email
+Routing/Sending manual setup notes.
