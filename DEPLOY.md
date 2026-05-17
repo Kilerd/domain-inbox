@@ -3,7 +3,7 @@
 A complete walkthrough for getting `domain-inbox` running on your own
 Cloudflare account — from a single click, or step by step from a shell.
 
-> Replace every `<YOUR-GH-OWNER>/<YOUR-REPO>` below with the GitHub
+> Replace every `Kilerd/domain-inbox` below with the GitHub
 > path of your fork. Replace `<your-domain.com>` with a domain you
 > control and that already lives on Cloudflare nameservers.
 
@@ -11,7 +11,7 @@ Cloudflare account — from a single click, or step by step from a shell.
 
 ## Option A — One-click deploy (recommended for first try)
 
-[![Deploy to Cloudflare](https://deploy.workers.cloudflare.com/button)](https://deploy.workers.cloudflare.com/?url=https://github.com/<YOUR-GH-OWNER>/<YOUR-REPO>)
+[![Deploy to Cloudflare](https://deploy.workers.cloudflare.com/button)](https://deploy.workers.cloudflare.com/?url=https://github.com/Kilerd/domain-inbox)
 
 Clicking the button will:
 
@@ -60,7 +60,7 @@ or the one-click flow does not fit your monorepo setup.
 ### 1. Clone, install, log in
 
 ```bash
-git clone https://github.com/<YOUR-GH-OWNER>/<YOUR-REPO>.git domain-inbox
+git clone https://github.com/Kilerd/domain-inbox.git domain-inbox
 cd domain-inbox
 pnpm install
 pnpm --filter @domain-inbox/worker exec wrangler login

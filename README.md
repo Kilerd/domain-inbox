@@ -5,7 +5,7 @@ send via a Resend-compatible HTTP API, manage everything from a single web UI.
 
 ## Deploy to your own Cloudflare account
 
-[![Deploy to Cloudflare](https://deploy.workers.cloudflare.com/button)](https://deploy.workers.cloudflare.com/?url=https://github.com/<YOUR-GH-OWNER>/<YOUR-REPO>)
+[![Deploy to Cloudflare](https://deploy.workers.cloudflare.com/button)](https://deploy.workers.cloudflare.com/?url=https://github.com/Kilerd/domain-inbox)
 
 The button forks the repo, provisions the D1 / R2 / KV / Email Sending
 bindings declared in [`apps/worker/wrangler.toml`](./apps/worker/wrangler.toml),
