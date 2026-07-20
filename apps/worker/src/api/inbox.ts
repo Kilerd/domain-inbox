@@ -227,9 +227,19 @@ async function fromSuggestions(env: Env, user: AuthUser): Promise<Response> {
 
 async function openInboxStream(env: Env, user: AuthUser): Promise<Response> {
   const encoder = new TextEncoder();
-  const key = `inbox:lastUpdate:${user.id}`;
-  const stored = await env.KV.get<string>(key, "text");
-  let lastSeen = stored ? parseInt(stored, 10) : 0;
+  // Change signal = max(created_at) of the owner's messages, read from D1.
+  // D1 is strongly consistent, so a 2s tick really means ~2s to notify; the
+  // previous KV beacon was edge-cached for ≥60s, which quietly turned
+  // "realtime" into minute-late. The query rides idx_messages_owner_received.
+  const latest = async (): Promise<number> => {
+    const r = await env.DB
+      .prepare(`SELECT MAX(received_at) AS ts FROM messages WHERE owner_id = ?1`)
+      .bind(user.id)
+      .first<{ ts: number | null }>();
+    return r?.ts ?? 0;
+  };
+  let lastSeen = await latest();
+  let cancelled = false;
 
   const stream = new ReadableStream({
     async start(controller) {
@@ -240,9 +250,8 @@ async function openInboxStream(env: Env, user: AuthUser): Promise<Response> {
         controller.enqueue(
           encoder.encode(`event: hello\ndata: ${JSON.stringify({ user_id: user.id, ts: Date.now() })}\n\n`),
         );
-        while (Date.now() - startedAt < MAX_LIFETIME_MS) {
-          const ts = await env.KV.get<string>(key, "text");
-          const current = ts ? parseInt(ts, 10) : 0;
+        while (!cancelled && Date.now() - startedAt < MAX_LIFETIME_MS) {
+          const current = await latest();
           if (current > lastSeen) {
             lastSeen = current;
             controller.enqueue(
@@ -253,9 +262,20 @@ async function openInboxStream(env: Env, user: AuthUser): Promise<Response> {
           }
           await new Promise((r) => setTimeout(r, TICK_MS));
         }
+      } catch {
+        // enqueue after client disconnect — expected teardown path
       } finally {
-        controller.close();
+        if (!cancelled) {
+          try {
+            controller.close();
+          } catch {
+            // stream already canceled/errored
+          }
+        }
       }
+    },
+    cancel() {
+      cancelled = true;
     },
   });
 
@@ -312,19 +332,30 @@ function viewClause(view: View): ViewFilter {
 async function listThreads(url: URL, env: Env, user: AuthUser): Promise<Response> {
   const limit = Math.min(parseInt(url.searchParams.get("limit") ?? "50", 10), 100);
   const cursorParam = url.searchParams.get("cursor");
-  const cursorTs = cursorParam ? parseInt(cursorParam, 10) : Number.MAX_SAFE_INTEGER;
   const view = (url.searchParams.get("view") ?? "inbox") as View;
   const domain = url.searchParams.get("domain");
   const alias = url.searchParams.get("alias");
   const q = url.searchParams.get("q")?.trim() ?? "";
 
   const filter = viewClause(view);
-  const where: string[] = [
-    "t.owner_id = ?",
-    "t.last_message_at < ?",
-    filter.where,
-  ];
-  const binds: unknown[] = [user.id, cursorTs, ...filter.binds];
+  const where: string[] = ["t.owner_id = ?", filter.where];
+  const binds: unknown[] = [user.id, ...filter.binds];
+
+  if (cursorParam) {
+    // cursor = "<last_message_at>:<id>" — the id tiebreaker prevents rows
+    // sharing the boundary timestamp from being skipped across pages.
+    // A bare timestamp (legacy client) still works, minus tie protection.
+    const [tsRaw, idRaw] = cursorParam.split(":");
+    const ts = parseInt(tsRaw ?? "", 10);
+    if (Number.isNaN(ts)) return httpError.validation("invalid cursor");
+    if (idRaw) {
+      where.push("(t.last_message_at < ? OR (t.last_message_at = ? AND t.id < ?))");
+      binds.push(ts, ts, idRaw);
+    } else {
+      where.push("t.last_message_at < ?");
+      binds.push(ts);
+    }
+  }
 
   if (domain) {
     where.push("t.domain_id = ?");
@@ -337,10 +368,12 @@ async function listThreads(url: URL, env: Env, user: AuthUser): Promise<Response
     binds.push(alias);
   }
   if (q) {
-    const like = `%${q.replace(/[%_]/g, "")}%`;
+    // Escape LIKE metacharacters instead of stripping them — searching for
+    // "100%" should search for "100%", not "100".
+    const like = `%${q.replace(/[\\%_]/g, (c) => `\\${c}`)}%`;
     where.push(
       "EXISTS (SELECT 1 FROM messages m WHERE m.thread_id = t.id AND " +
-        "(m.subject LIKE ? OR m.snippet LIKE ? OR m.from_addr LIKE ?))",
+        "(m.subject LIKE ? ESCAPE '\\' OR m.snippet LIKE ? ESCAPE '\\' OR m.from_addr LIKE ? ESCAPE '\\'))",
     );
     binds.push(like, like, like);
   }
@@ -358,7 +391,7 @@ async function listThreads(url: URL, env: Env, user: AuthUser): Promise<Response
               ORDER BY received_at DESC LIMIT 1) AS snippet
     FROM threads t
     WHERE ${where.join(" AND ")}
-    ORDER BY t.last_message_at DESC
+    ORDER BY t.last_message_at DESC, t.id DESC
     LIMIT ?`;
 
   const res = await env.DB.prepare(sql).bind(...binds).all<ThreadRow>();
@@ -366,7 +399,7 @@ async function listThreads(url: URL, env: Env, user: AuthUser): Promise<Response
   let nextCursor: string | null = null;
   if (rows.length > limit) {
     const last = rows[limit - 1]!;
-    nextCursor = String(last.last_message_at);
+    nextCursor = `${last.last_message_at}:${last.id}`;
     rows.length = limit;
   }
 
@@ -629,8 +662,11 @@ async function batchFlags(req: Request, env: Env, user: AuthUser): Promise<Respo
   if (!Array.isArray(body.ids) || body.ids.length === 0) {
     return httpError.validation("ids must be a non-empty array");
   }
-  if (body.ids.length > 500) {
-    return httpError.validation("ids cannot exceed 500 per call");
+  // applyThreadFlags issues up to ~5 D1 queries per thread; the Workers
+  // subrequest budget is 1000, so 500 ids would die mid-loop with flags
+  // half-applied. 100 ids ≈ ≤500 subrequests, comfortably inside the cap.
+  if (body.ids.length > 100) {
+    return httpError.validation("ids cannot exceed 100 per call");
   }
   let updated = 0;
   let missed = 0;
@@ -679,15 +715,18 @@ async function getThreadMessages(env: Env, user: AuthUser, threadId: string): Pr
   const messages = msgsRes.results ?? [];
   const ids = messages.map((m) => m.id);
 
-  let attachments: Map<string, AttachmentRow[]> = new Map();
-  if (ids.length) {
-    const placeholders = ids.map((_, i) => `?${i + 1}`).join(",");
+  // Chunk the IN() lookups: D1 caps bound parameters at 100 per statement,
+  // and a long thread can exceed that.
+  const attachments: Map<string, AttachmentRow[]> = new Map();
+  for (let i = 0; i < ids.length; i += 90) {
+    const chunk = ids.slice(i, i + 90);
+    const placeholders = chunk.map((_, j) => `?${j + 1}`).join(",");
     const attRes = await env.DB
       .prepare(
         `SELECT id, message_id, filename, content_type, size_bytes, content_id, is_inline
          FROM attachments WHERE message_id IN (${placeholders})`,
       )
-      .bind(...ids)
+      .bind(...chunk)
       .all<AttachmentRow & { message_id: string }>();
     for (const a of attRes.results ?? []) {
       const list = attachments.get(a.message_id) ?? [];
