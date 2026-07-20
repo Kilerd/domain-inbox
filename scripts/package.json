@@ -4,7 +4,8 @@
   "version": "0.0.0",
   "type": "module",
   "scripts": {
-    "resend-compat": "node resend-compat-smoke.mjs"
+    "resend-compat": "node resend-compat-smoke.mjs",
+    "webhook-check": "node webhook-signature-check.mjs"
   },
   "dependencies": {
     "resend": "^6.1.2",

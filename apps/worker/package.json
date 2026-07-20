@@ -4,10 +4,10 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "dev": "wrangler dev",
+    "dev": "wrangler dev --env dev",
     "deploy:dev": "wrangler deploy --env dev",
     "deploy:staging": "wrangler deploy --env staging",
-    "deploy:prod": "wrangler deploy --env prod",
+    "deploy:prod": "wrangler deploy",
     "tail:dev": "wrangler tail --env dev --format pretty",
     "typecheck": "tsc --noEmit",
     "test": "vitest run",

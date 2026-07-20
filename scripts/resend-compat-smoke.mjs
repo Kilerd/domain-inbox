@@ -3,23 +3,32 @@
 // Verifies that an unmodified `resend` SDK pointed at our worker's base URL
 // can: (1) send an email, (2) GET it by id, (3) replay idempotency safely.
 //
+// NOTE: this sends real email. All four env vars are required — there are
+// no defaults, so mail is never sent from/to reserved example domains.
+//
 // Usage:
-//   API_TOKEN=re_live_xxx BASE_URL=https://domain-inbox-dev.<your-subdomain>.workers.dev/api/v1 \
+//   API_TOKEN=re_live_xxx \
+//   BASE_URL=https://domain-inbox-dev.<your-subdomain>.workers.dev/api/v1 \
+//   FROM_DOMAIN=<your-domain.com> \
+//   RECIPIENT=<an-address-you-control> \
 //     node resend-compat-smoke.mjs
 
 import { Resend } from "resend";
 
-const API_TOKEN = process.env.API_TOKEN;
-const BASE_URL = process.env.BASE_URL;
-if (!BASE_URL) {
-  console.error("BASE_URL env var is required (e.g. https://domain-inbox-dev.<your-subdomain>.workers.dev/api/v1)");
+const REQUIRED = {
+  API_TOKEN: "an API token minted in the SPA (re_live_xxx)",
+  BASE_URL: "worker API base, e.g. https://domain-inbox-dev.<your-subdomain>.workers.dev/api/v1",
+  FROM_DOMAIN: "a domain you own with Email Routing enabled (mail is sent from hello@<FROM_DOMAIN>)",
+  RECIPIENT: "a real mailbox you control that will receive the probe email",
+};
+const missing = Object.keys(REQUIRED).filter((k) => !process.env[k]);
+if (missing.length > 0) {
+  console.error("Missing required env vars — this script sends real email, so nothing is defaulted:");
+  for (const k of missing) console.error(`  ${k}  — ${REQUIRED[k]}`);
   process.exit(1);
 }
 
-if (!API_TOKEN) {
-  console.error("API_TOKEN env var is required");
-  process.exit(1);
-}
+const { API_TOKEN, BASE_URL, FROM_DOMAIN, RECIPIENT } = process.env;
 
 // resend-node honors RESEND_BASE_URL when constructing its internal client.
 process.env.RESEND_BASE_URL = BASE_URL;
@@ -30,8 +39,8 @@ const idem = `compat-${Date.now()}`;
 console.log(`> POST ${BASE_URL}/emails (idem=${idem})`);
 const sent = await resend.emails.send(
   {
-    from: `Domain Inbox <hello@${process.env.FROM_DOMAIN ?? "example.com"}>`,
-    to: ["test@example.com"],
+    from: `Domain Inbox <hello@${FROM_DOMAIN}>`,
+    to: [RECIPIENT],
     subject: "Resend SDK compat probe",
     html: "<p>Hello from <b>resend-node</b>.</p>",
     text: "Hello from resend-node.",
@@ -50,8 +59,8 @@ const id = sent.data.id;
 console.log(`> POST again with same idempotency-key — expect same id`);
 const sent2 = await resend.emails.send(
   {
-    from: `hello@${process.env.FROM_DOMAIN ?? "example.com"}`,
-    to: ["test@example.com"],
+    from: `hello@${FROM_DOMAIN}`,
+    to: [RECIPIENT],
     subject: "Resend SDK compat probe",
     text: "Hello",
   },

@@ -32,20 +32,21 @@ That's optional convenience — not a real blocker.
 
 ### Cloudflare Access (before promoting to staging/prod)
 
-The dev worker uses a `DEV_USER_EMAIL` backdoor for auth. For prod:
+The dev worker has an auth backdoor gated on the `DEV_USER_TOKEN` secret
+(requests must carry a matching `X-Dev-Auth` header). For prod:
 
 1. Zero Trust → Access → Applications → Add → Self-hosted
 2. Application domain: `<your worker subdomain>.workers.dev`
 3. Identity provider: One-Time PIN (email) or your IdP
 4. Policy: Allow → emails listed
 5. Copy the **AUD tag**
-6. In `apps/worker/wrangler.toml`, under `[env.prod.vars]`:
+6. In `apps/worker/wrangler.toml`, under the top-level `[vars]`
+   (the top-level config *is* production — there is no `[env.prod]`):
    ```toml
    ACCESS_TEAM_DOMAIN = "<your-team>"
    ACCESS_AUD = "<aud-tag>"
-   # Remove DEV_USER_EMAIL / DEV_USER_NAME
    ```
-7. `pnpm exec wrangler deploy --env prod`
+7. `pnpm exec wrangler deploy` (or `pnpm --filter @domain-inbox/worker run deploy:prod`)
 
 ## Key learning (from real-world testing)
 

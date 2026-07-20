@@ -1,13 +1,15 @@
 # Cloudflare Worker: domain-inbox
-# Single Worker hosting fetch (API + Static Assets), email handler, queue consumers.
+# Single Worker hosting fetch (API + Static Assets), the email() inbound
+# handler, and a scheduled() cron sweep (scheduled sends + webhook retries).
 #
-# Environments:
-#   - top-level (no --env): unused; reserved to force explicit env selection
+# Environments (wrangler named envs do NOT inherit bindings — each env below
+# carries its full set):
+#   - top-level (no --env): production — `pnpm run deploy:prod`
 #   - dev:      domain-inbox-dev      — bound to PRIMARY_DOMAIN for real receive/send tests
 #   - staging:  domain-inbox-staging  — pre-prod
-#   - prod:     domain-inbox-prod     — production
 #
-# Bindings (D1/R2/KV/EMAIL/Queues/Assets) are added per cycle. C0.1 keeps it empty.
+# Replace every <placeholder> with your own account / resource ids
+# (`wrangler d1 create`, `wrangler r2 bucket create`, `wrangler kv namespace create`).
 
 name = "domain-inbox"
 main = "src/index.ts"
@@ -15,11 +17,64 @@ compatibility_date = "2026-05-15"
 compatibility_flags = ["nodejs_compat"]
 account_id = "<your-cloudflare-account-id>"
 
-# Default env is intentionally minimal; deploys must pass --env <name>.
+# Every 2 minutes: due scheduled sends + webhook delivery retries.
+[triggers]
+crons = ["*/2 * * * *"]
+
+# Workers Logs — without this, production debugging is limited to a live
+# `wrangler tail` session.
+[observability]
+enabled = true
+
+[vars]
+ENV = "prod"
+WORKER_NAME = "domain-inbox"
+PRIMARY_DOMAIN = "<your-domain.com>"
+APP_BASE_URL = "https://domain-inbox.<your-workers-subdomain>.workers.dev"
+# Once Cloudflare Access is configured, uncomment these:
+# ACCESS_TEAM_DOMAIN = "<your-team>"
+# ACCESS_AUD = "<application-aud-tag>"
+
+[[d1_databases]]
+binding = "DB"
+database_name = "domain-inbox"
+database_id = "<your-d1-database-id>"
+migrations_dir = "migrations"
+
+[[r2_buckets]]
+binding = "R2"
+bucket_name = "domain-inbox"
+
+[[kv_namespaces]]
+binding = "KV"
+id = "<your-kv-namespace-id>"
+
+[assets]
+directory = "../web/dist"
+binding = "ASSETS"
+not_found_handling = "single-page-application"
+# Force /api/* through the Worker first, never let the SPA index.html fallback
+# intercept dynamic API paths (which leaks 200 HTML responses + CF edge cache).
+# /t/* is the open+click tracking surface — same SPA-fallback caveat applies.
+run_worker_first = ["/api/*", "/t/*"]
+
+# Cloudflare Email Sending binding. On Workers Paid this can send to any recipient;
+# on Free it's limited to verified destinations. Requires the user has enabled
+# Email Sending on at least one verified domain in their Cloudflare account.
+[[send_email]]
+name = "EMAIL"
+
+# ── dev ─────────────────────────────────────────────────────────────────────
 
 [env.dev]
 name = "domain-inbox-dev"
 workers_dev = true
+
+[env.dev.triggers]
+crons = ["*/2 * * * *"]
+
+[env.dev.observability]
+enabled = true
 
 [env.dev.vars]
 ENV = "dev"
@@ -55,21 +110,48 @@ id = "<your-kv-namespace-id>"
 directory = "../web/dist"
 binding = "ASSETS"
 not_found_handling = "single-page-application"
-# Force /api/* through the Worker first, never let the SPA index.html fallback
-# intercept dynamic API paths (which leaks 200 HTML responses + CF edge cache).
-# /t/* is the open+click tracking surface — same SPA-fallback caveat applies.
 run_worker_first = ["/api/*", "/t/*"]
 
-# Cloudflare Email Sending binding. On Workers Paid this can send to any recipient;
-# on Free it's limited to verified destinations. Requires the user has enabled
-# Email Sending on at least one verified domain in their Cloudflare account.
 [[env.dev.send_email]]
 name = "EMAIL"
+
+# ── staging ─────────────────────────────────────────────────────────────────
 
 [env.staging]
 name = "domain-inbox-staging"
 workers_dev = true
 
-[env.prod]
-name = "domain-inbox-prod"
-workers_dev = true
+[env.staging.triggers]
+crons = ["*/2 * * * *"]
+
+[env.staging.observability]
+enabled = true
+
+[env.staging.vars]
+ENV = "staging"
+WORKER_NAME = "domain-inbox-staging"
+PRIMARY_DOMAIN = "<your-domain.com>"
+APP_BASE_URL = "https://domain-inbox-staging.<your-workers-subdomain>.workers.dev"
+
+[[env.staging.d1_databases]]
+binding = "DB"
+database_name = "domain-inbox-staging"
+database_id = "<your-d1-database-id>"
+migrations_dir = "migrations"
+
+[[env.staging.r2_buckets]]
+binding = "R2"
+bucket_name = "domain-inbox-staging"
+
+[[env.staging.kv_namespaces]]
+binding = "KV"
+id = "<your-kv-namespace-id>"
+
+[env.staging.assets]
+directory = "../web/dist"
+binding = "ASSETS"
+not_found_handling = "single-page-application"
+run_worker_first = ["/api/*", "/t/*"]
+
+[[env.staging.send_email]]
+name = "EMAIL"

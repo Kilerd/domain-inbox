@@ -1,6 +1,13 @@
 // Verifies that our worker's Svix-style signature output matches an independent
-// Node HMAC implementation, then exercises the Resend SDK's official
-// `resend.webhooks` verifier against the same signature.
+// Node HMAC implementation, then verifies the same signature with the official
+// `svix` SDK directly (the library Resend's webhook verification is built on).
+//
+// Requires a worker running the *dev* environment (ENV=dev) — the
+// /api/_test/sign endpoint it calls is dev-only.
+//
+// Usage:
+//   BASE_URL=https://domain-inbox-dev.<your-subdomain>.workers.dev \
+//     node webhook-signature-check.mjs
 
 import crypto from "node:crypto";
 import { Webhook } from "svix";
@@ -33,6 +40,13 @@ const workerRes = await fetch(`${BASE}/api/_test/sign`, {
   headers: { "content-type": "application/json" },
   body: JSON.stringify({ secret, msg_id: msgId, timestamp, body }),
 });
+if (!workerRes.ok) {
+  console.error(`worker returned ${workerRes.status} for POST ${BASE}/api/_test/sign`);
+  console.error(
+    "hint: /api/_test/sign is dev-only — point BASE_URL at a worker running the dev environment (ENV=dev, e.g. the domain-inbox-dev deployment or `wrangler dev`).",
+  );
+  process.exit(2);
+}
 const { signature: sigWorker } = await workerRes.json();
 console.log("worker   sig:", sigWorker);
 

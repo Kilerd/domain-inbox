@@ -55,23 +55,26 @@ official Svix SDK).
 
 ## Deploy
 
-[![Deploy to Cloudflare](https://deploy.workers.cloudflare.com/button)](https://deploy.workers.cloudflare.com/?url=https://github.com/Kilerd/domain-inbox)
+Deploying is a short `wrangler` session: create D1 / R2 / KV, fill the
+`<placeholder>` ids in `apps/worker/wrangler.toml`, build the SPA, apply
+migrations, deploy. Two steps Cloudflare can't automate: enable
+**Email Routing** on your domain, and apply **D1 migrations**.
 
-The button forks the repo, provisions the D1 / R2 / KV / Email Sending
-bindings, and ships the first deploy. Two post-deploy steps Cloudflare can't
-automate: enable **Email Routing** on your domain, and apply **D1 migrations**.
+(The Deploy-to-Cloudflare one-click button doesn't work for this repo —
+pnpm monorepo with the config in `apps/worker/`, and the Email Sending
+binding can't be auto-provisioned.)
 
-See [DEPLOY.md](./DEPLOY.md) for the 2-minute walkthrough (and the fully
-manual `wrangler` path).
+See [DEPLOY.md](./DEPLOY.md) for the full walkthrough.
 
 ## How it works
 
-One Worker, three entry points:
+One Worker, four entry points:
 
 ```
-Inbound mail   ─►  email() handler  ─►  postal-mime  ─►  D1 + R2  ─►  SSE push to SPA
-HTTP + SPA     ─►  fetch() handler  ─►  /api/v1/* (Resend-compatible) + inbox routes
-Outbound send  ─►  env.EMAIL.send() ─►  Svix-signed webhook fan-out
+Inbound mail   ─►  email() handler      ─►  postal-mime  ─►  D1 + R2  ─►  SSE push to SPA
+HTTP + SPA     ─►  fetch() handler      ─►  /api/v1/* (Resend-compatible) + inbox routes
+Outbound send  ─►  env.EMAIL.send()     ─►  Svix-signed webhook fan-out
+Cron (2 min)   ─►  scheduled() handler  ─►  due scheduled sends + webhook delivery retries
 ```
 
 The web UI and the public API share the same Worker; the SPA is served from
@@ -100,7 +103,7 @@ scripts/              smoke tests: Resend SDK compat, webhook signature parity
 ```bash
 pnpm install
 
-# Worker only — wrangler dev on http://127.0.0.1:8787
+# Worker only (runs the `dev` env) — wrangler dev on http://127.0.0.1:8787
 pnpm --filter @domain-inbox/worker run dev
 
 # SPA against a remote dev worker
@@ -117,6 +120,10 @@ Cloudflare Email Routing / Sending setup notes, see [CHECKLIST.md](./CHECKLIST.m
 
 ## Status & known limitations
 
+- **Webhook deliveries retry automatically.** Failed deliveries are retried
+  by the cron sweep with backoff (5m / 30m / 2h / 5h) and marked dead after
+  5 attempts. Scheduled sends (`scheduled_at`) are executed by the same
+  sweep, so both work without any external queue.
 - **Single-tenant today.** Rows are scoped by `owner_id`, so inviting a second
   user currently shows them an empty inbox. Multi-tenant refactor is on the
   roadmap before this is safe to host for multiple humans.
