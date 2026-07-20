@@ -30,10 +30,17 @@ export async function sha256Hex(text: string): Promise<string> {
 }
 
 export function newToken(): string {
-  const rnd = new Uint8Array(22);
-  crypto.getRandomValues(rnd);
+  // Rejection-sample so every base62 character is uniform (bytes 248-255
+  // would otherwise bias toward the first 8 characters of the alphabet).
   let s = "";
-  for (const b of rnd) s += BASE62[b % 62];
+  while (s.length < 22) {
+    const rnd = new Uint8Array(32);
+    crypto.getRandomValues(rnd);
+    for (const b of rnd) {
+      if (s.length >= 22) break;
+      if (b < 248) s += BASE62[b % 62];
+    }
+  }
   return TOKEN_PREFIX + s;
 }
 

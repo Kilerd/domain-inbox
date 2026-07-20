@@ -11,6 +11,7 @@ import {
   handleEmailSend,
   listOutboundMessages,
   patchOutboundMessage,
+  processScheduledSends,
 } from "./api/emails";
 import { handleImgProxy } from "./api/img_proxy";
 import { handleInbox } from "./api/inbox";
@@ -22,7 +23,7 @@ import { authenticate } from "./auth";
 import { handleInboundEmail } from "./email/ingest";
 import type { Env } from "./env";
 import { httpError } from "./http";
-import { svixSign } from "./webhooks/dispatch";
+import { retryPendingWebhookDeliveries, svixSign } from "./webhooks/dispatch";
 
 export default {
   async fetch(req: Request, env: Env, ctx: ExecutionContext): Promise<Response> {
@@ -45,6 +46,13 @@ export default {
 
   async email(message: ForwardableEmailMessage, env: Env, ctx: ExecutionContext): Promise<void> {
     await handleInboundEmail(message, env, ctx);
+  },
+
+  // Cron sweep (see wrangler.toml [triggers]): due scheduled sends + webhook
+  // delivery retries.
+  async scheduled(_controller: ScheduledController, env: Env, ctx: ExecutionContext): Promise<void> {
+    ctx.waitUntil(processScheduledSends(env, ctx));
+    ctx.waitUntil(retryPendingWebhookDeliveries(env));
   },
 } satisfies ExportedHandler<Env>;
 
@@ -87,9 +95,6 @@ async function tryPublic(url: URL, req: Request, env: Env): Promise<Response | n
   if (url.pathname === "/api/_health") {
     return Response.json({ ok: true, service: "domain-inbox", env: env.ENV, ts: Date.now() });
   }
-  if (url.pathname === "/api/_debug/db") {
-    return handleDebugDb(env);
-  }
   if (url.pathname === "/api/img-proxy") {
     return handleImgProxy(url, env);
   }
@@ -100,6 +105,9 @@ async function tryPublic(url: URL, req: Request, env: Env): Promise<Response | n
 }
 
 async function tryDevFixtures(url: URL, req: Request, env: Env): Promise<Response | null> {
+  if (url.pathname === "/api/_debug/db") {
+    return handleDebugDb(env);
+  }
   if (url.pathname === "/api/_test/inject-email" && req.method === "POST") {
     return handleInjectEmail(req, env);
   }
@@ -120,7 +128,7 @@ async function tryDevFixtures(url: URL, req: Request, env: Env): Promise<Respons
     return handleWebhookSink(req, env);
   }
   if (url.pathname === "/api/_test/webhook-sink" && req.method === "GET") {
-    const stored = await env.KV.get<string>("test:webhook-sink:last", "text");
+    const stored = await env.KV.get("test:webhook-sink:last", "text");
     return stored
       ? new Response(stored, { headers: { "content-type": "application/json" } })
       : Response.json({ empty: true });

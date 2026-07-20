@@ -56,8 +56,15 @@ async function postLogin(req: Request, env: Env, ctx: ExecutionContext): Promise
           log.info("auth.login_blocked_not_invited", { email });
           return;
         }
+        // Never derive the link origin from the incoming request: a spoofed
+        // Host header would end up in the victim's sign-in email (token
+        // exfiltration → account takeover). APP_BASE_URL is required.
+        const base = env.APP_BASE_URL;
+        if (!base) {
+          log.warn("auth.login_send_skipped_no_base_url", { email });
+          return;
+        }
         const token = await issueLoginToken(env, email);
-        const base = env.APP_BASE_URL ?? new URL(req.url).origin;
         const link = `${base}/api/auth/callback?token=${encodeURIComponent(token)}`;
         await sendLoginEmail(env, email, link);
       } catch (err) {
@@ -133,7 +140,6 @@ async function getCallback(url: URL, req: Request, env: Env): Promise<Response> 
   const ip = req.headers.get("cf-connecting-ip");
   const sess = await createSession(env, inserted.id, { userAgent: ua, ip });
   const cookie = makeSessionCookie(sess.rawToken, sess.expiresAt);
-  const dest = env.APP_BASE_URL ?? new URL(req.url).origin;
 
   log.info("auth.callback_success", {
     email: consumed.email,
@@ -146,7 +152,7 @@ async function getCallback(url: URL, req: Request, env: Env): Promise<Response> 
   return new Response(null, {
     status: 302,
     headers: {
-      location: `${dest}/`,
+      location: "/",
       "set-cookie": cookie,
     },
   });

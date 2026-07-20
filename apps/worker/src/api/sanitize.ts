@@ -5,7 +5,9 @@
 //   2. Strip all on* event-handler attributes from any element
 //   3. Normalize <a>: force target=_blank rel=noopener noreferrer, drop non-http schemes
 //   4. Rewrite <img src> to /api/img-proxy (privacy-preserving fetch, no Referer leakage)
-//   5. Client adds another layer via <iframe sandbox> + CSP meta tag
+//   5. Strip inline styles containing url(...) and media tags with remote
+//      sources — those would bypass the img-proxy privacy layer
+//   6. The SPA's CSP meta (script-src 'self') is the second layer client-side
 
 const TAGS_TO_REMOVE = [
   "script",
@@ -25,6 +27,12 @@ const TAGS_TO_REMOVE = [
   "meta",
   "base",
   "link",
+  // Media elements load remote resources via src/poster without going
+  // through the img proxy; rare in email, so drop rather than proxy.
+  "video",
+  "audio",
+  "source",
+  "track",
 ];
 
 function isSafeHref(href: string): boolean {
@@ -38,9 +46,15 @@ export async function sanitizeEmailHtml(rawHtml: string, proxyPrefix: string): P
         // Collect names first; HTMLRewriter invalidates the iterator if we
         // mutate during iteration.
         const toDrop: string[] = [];
-        for (const [name] of el.attributes) {
+        for (const [name, value] of el.attributes) {
+          if (!name) continue;
           const lc = name.toLowerCase();
           if (lc.startsWith("on") || lc === "srcset" || lc === "background") {
+            toDrop.push(name);
+          }
+          // Inline styles can smuggle remote loads (background:url(...))
+          // around the img proxy; drop the whole attribute in that case.
+          if (lc === "style" && /url\s*\(/i.test(value ?? "")) {
             toDrop.push(name);
           }
         }
