@@ -15,7 +15,7 @@ name = "domain-inbox"
 main = "src/index.ts"
 compatibility_date = "2026-05-15"
 compatibility_flags = ["nodejs_compat"]
-account_id = "<your-cloudflare-account-id>"
+account_id = "f4ea99edb0eb0492ba4ecd74cd86b299"
 
 # Every 2 minutes: due scheduled sends + webhook delivery retries.
 [triggers]
@@ -30,7 +30,7 @@ enabled = true
 ENV = "prod"
 WORKER_NAME = "domain-inbox"
 PRIMARY_DOMAIN = "<your-domain.com>"
-APP_BASE_URL = "https://domain-inbox.<your-workers-subdomain>.workers.dev"
+APP_BASE_URL = "https://domain-inbox.kilerd.workers.dev"
 # Once Cloudflare Access is configured, uncomment these:
 # ACCESS_TEAM_DOMAIN = "<your-team>"
 # ACCESS_AUD = "<application-aud-tag>"
@@ -38,7 +38,7 @@ APP_BASE_URL = "https://domain-inbox.<your-workers-subdomain>.workers.dev"
 [[d1_databases]]
 binding = "DB"
 database_name = "domain-inbox"
-database_id = "<your-d1-database-id>"
+database_id = "2e8e8eee-e1c0-4e82-abd6-0e4cacb0bcc0"
 migrations_dir = "migrations"
 
 [[r2_buckets]]
@@ -47,7 +47,7 @@ bucket_name = "domain-inbox"
 
 [[kv_namespaces]]
 binding = "KV"
-id = "<your-kv-namespace-id>"
+id = "1027035929a64a3eb6b8c24a82a41f64"
 
 [assets]
 directory = "../web/dist"
@@ -80,7 +80,7 @@ enabled = true
 ENV = "dev"
 WORKER_NAME = "domain-inbox-dev"
 PRIMARY_DOMAIN = "<your-domain.com>"
-APP_BASE_URL = "https://domain-inbox-dev.<your-workers-subdomain>.workers.dev"
+APP_BASE_URL = "https://domain-inbox-dev.kilerd.workers.dev"
 
 # Dev backdoor — only activates when the request carries `X-Dev-Auth: $DEV_USER_TOKEN`.
 # The token is provisioned via `wrangler secret put DEV_USER_TOKEN --env dev` so it
@@ -95,7 +95,7 @@ DEV_USER_NAME = "Dev User"
 [[env.dev.d1_databases]]
 binding = "DB"
 database_name = "domain-inbox-dev"
-database_id = "<your-d1-database-id>"
+database_id = "ab23d871-1f38-47cf-91ae-80151da29a38"
 migrations_dir = "migrations"
 
 [[env.dev.r2_buckets]]
@@ -104,7 +104,7 @@ bucket_name = "domain-inbox-dev"
 
 [[env.dev.kv_namespaces]]
 binding = "KV"
-id = "<your-kv-namespace-id>"
+id = "2a2142b94c6947778dc61833afefd930"
 
 [env.dev.assets]
 directory = "../web/dist"
@@ -131,7 +131,7 @@ enabled = true
 ENV = "staging"
 WORKER_NAME = "domain-inbox-staging"
 PRIMARY_DOMAIN = "<your-domain.com>"
-APP_BASE_URL = "https://domain-inbox-staging.<your-workers-subdomain>.workers.dev"
+APP_BASE_URL = "https://domain-inbox-staging.kilerd.workers.dev"
 
 [[env.staging.d1_databases]]
 binding = "DB"
