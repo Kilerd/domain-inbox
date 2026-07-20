@@ -2,7 +2,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Trash2, Webhook } from "lucide-react";
 import { useState } from "react";
 import { api, type WebhookCreated } from "@/api";
-import { Badge, Button, CopyableSecret, ErrorText, Input, Panel } from "@/components/ui";
+import { Badge, Button, CopyableSecret, EmptyState, ErrorText, Input, Panel } from "@/components/ui";
 
 const EVENT_TYPES = [
   "email.sent",
@@ -77,7 +77,7 @@ export function WebhooksTab() {
               <label key={ev} className="inline-flex cursor-pointer items-center gap-1.5 text-xs">
                 <input
                   type="checkbox"
-                  className="rounded border-zinc-300"
+                  className="rounded border-zinc-300 dark:border-zinc-600"
                   checked={picked.has(ev)}
                   onChange={() => toggle(ev)}
                 />
@@ -108,9 +108,11 @@ export function WebhooksTab() {
       </Panel>
 
       <Panel title="Endpoints">
-        {list.isLoading && <p className="text-sm text-zinc-500">loading…</p>}
+        {list.isLoading && <p className="text-sm text-zinc-500">Loading…</p>}
         {list.data?.length === 0 && (
-          <p className="text-sm text-zinc-500">No webhook endpoints yet.</p>
+          <EmptyState icon={Webhook} className="py-6">
+            No webhook endpoints yet.
+          </EmptyState>
         )}
         <ul className="divide-y divide-zinc-100 dark:divide-zinc-800">
           {list.data?.map((w) => (

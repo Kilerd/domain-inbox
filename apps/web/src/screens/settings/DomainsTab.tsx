@@ -2,7 +2,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { ExternalLink, Globe, Inbox, RefreshCw, Send, Trash2 } from "lucide-react";
 import { useState } from "react";
 import { api, ApiError, type Domain } from "@/api";
-import { Badge, Button, ErrorText, Input, Panel } from "@/components/ui";
+import { Badge, Button, EmptyState, ErrorText, Input, Panel } from "@/components/ui";
 import { useCompose } from "@/lib/compose-store";
 import { cn } from "@/lib/utils";
 
@@ -49,12 +49,12 @@ export function DomainsTab() {
         </form>
         {err && <ErrorText>{err}</ErrorText>}
         {createMut.data?.auto_configured && (
-          <p className="mt-2 text-xs text-emerald-600">
+          <p className="mt-2 text-xs text-emerald-600 dark:text-emerald-400">
             ✓ Email Routing auto-configured via Cloudflare API.
           </p>
         )}
         {createMut.data?.auto_config_error && (
-          <p className="mt-2 text-xs text-amber-600">
+          <p className="mt-2 text-xs text-amber-600 dark:text-amber-400">
             Auto-config skipped: {createMut.data.auto_config_error}
           </p>
         )}
@@ -64,9 +64,9 @@ export function DomainsTab() {
         title="Your domains"
         description="DNS records are auto-published by Cloudflare when you enable Email Routing / Email Sending on the zone."
       >
-        {domains.isLoading && <p className="text-sm text-zinc-500">loading…</p>}
+        {domains.isLoading && <p className="text-sm text-zinc-500">Loading…</p>}
         {domains.data?.length === 0 && (
-          <p className="text-sm text-zinc-500">No domains yet.</p>
+          <EmptyState icon={Globe} className="py-6">No domains yet.</EmptyState>
         )}
         <div className="space-y-2">
           {domains.data?.map((d) => <DomainRow key={d.id} domain={d} />)}

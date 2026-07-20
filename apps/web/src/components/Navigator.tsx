@@ -14,6 +14,7 @@ import {
 } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import { api, type InboxAlias, type InboxView } from "@/api";
+import { FOCUS_RING } from "@/components/ui";
 import { useInboxView } from "@/lib/inbox-view";
 import { cn } from "@/lib/utils";
 
@@ -68,6 +69,7 @@ export function Navigator() {
               onClick={() => setView(s.view)}
               className={cn(
                 "flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left",
+                FOCUS_RING,
                 isActive
                   ? "bg-zinc-200 font-medium text-zinc-900 dark:bg-zinc-800 dark:text-zinc-100"
                   : "text-zinc-700 hover:bg-zinc-100 dark:text-zinc-300 dark:hover:bg-zinc-900",
@@ -89,7 +91,7 @@ export function Navigator() {
         <section className="mt-4 px-1">
           <SectionLabel>Aliases</SectionLabel>
           {aliases.isLoading && (
-            <div className="px-2 py-1 text-xs text-zinc-500">loading…</div>
+            <div className="px-2 py-1 text-xs text-zinc-500">Loading…</div>
           )}
           {aliases.data?.data.length === 0 && (
             <div className="px-2 py-1 text-xs italic text-zinc-500">
@@ -152,6 +154,7 @@ function DomainSwitcher() {
         className={cn(
           "flex w-full items-center gap-2 rounded-md border border-zinc-200 bg-white px-2.5 py-2 text-left transition-colors",
           "hover:bg-zinc-50 dark:border-zinc-800 dark:bg-zinc-900 dark:hover:bg-zinc-800",
+          FOCUS_RING,
         )}
       >
         {isAll ? (
@@ -231,6 +234,7 @@ function DomainOption({
       onClick={onClick}
       className={cn(
         "flex w-full items-center gap-2 px-3 py-2 text-left text-sm",
+        FOCUS_RING,
         active
           ? "bg-zinc-100 text-zinc-900 dark:bg-zinc-800 dark:text-zinc-100"
           : "hover:bg-zinc-50 dark:hover:bg-zinc-800",
@@ -243,7 +247,7 @@ function DomainOption({
           {badge}
         </span>
       )}
-      {active && <Check className="h-3.5 w-3.5 text-blue-600" />}
+      {active && <Check className="h-3.5 w-3.5 text-blue-600 dark:text-blue-400" />}
     </button>
   );
 }
@@ -263,6 +267,7 @@ function AliasRow({
       onClick={onSelect}
       className={cn(
         "flex w-full items-center gap-2 rounded-md px-2 py-1 text-left text-xs",
+        FOCUS_RING,
         active
           ? "bg-zinc-200 text-zinc-900 dark:bg-zinc-800 dark:text-zinc-100"
           : "text-zinc-600 hover:bg-zinc-100 dark:text-zinc-400 dark:hover:bg-zinc-900",

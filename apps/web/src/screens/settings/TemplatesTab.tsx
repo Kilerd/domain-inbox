@@ -2,7 +2,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Eye, FileText, Pencil, Plus, Trash2, X } from "lucide-react";
 import { useMemo, useState } from "react";
 import { api, type Template, type TemplateRender } from "@/api";
-import { Button, ErrorText, Input, Panel } from "@/components/ui";
+import { Button, EmptyState, ErrorText, Input, Panel, Textarea } from "@/components/ui";
 
 interface DraftForm {
   name: string;
@@ -107,9 +107,9 @@ export function TemplatesTab() {
             <span className="ml-1">New template</span>
           </Button>
         </div>
-        {list.isLoading && <p className="text-sm text-zinc-500">loading…</p>}
+        {list.isLoading && <p className="text-sm text-zinc-500">Loading…</p>}
         {sortedTemplates.length === 0 && !list.isLoading && (
-          <p className="text-sm text-zinc-500">No templates yet.</p>
+          <EmptyState icon={FileText} className="py-6">No templates yet.</EmptyState>
         )}
         <ul className="divide-y divide-zinc-100 dark:divide-zinc-800">
           {sortedTemplates.map((t) => (
@@ -165,21 +165,21 @@ export function TemplatesTab() {
             />
 
             <label className="block text-xs font-medium text-zinc-500">HTML body</label>
-            <textarea
+            <Textarea
               value={draft.html}
               onChange={(e) => setDraft((d) => ({ ...d, html: e.target.value }))}
               rows={8}
               placeholder="<p>Hello {{name}}!</p>"
-              className="w-full rounded-md border border-zinc-200 bg-white px-3 py-2 font-mono text-xs dark:border-zinc-700 dark:bg-zinc-900"
+              className="font-mono text-xs"
             />
 
             <label className="block text-xs font-medium text-zinc-500">Text body</label>
-            <textarea
+            <Textarea
               value={draft.text}
               onChange={(e) => setDraft((d) => ({ ...d, text: e.target.value }))}
               rows={4}
               placeholder="Hello {{name}}!"
-              className="w-full rounded-md border border-zinc-200 bg-white px-3 py-2 font-mono text-xs dark:border-zinc-700 dark:bg-zinc-900"
+              className="font-mono text-xs"
             />
 
             <div className="flex gap-2">
@@ -209,11 +209,11 @@ export function TemplatesTab() {
               <label className="block text-xs font-medium text-zinc-500">
                 Preview variables (JSON)
               </label>
-              <textarea
+              <Textarea
                 value={previewVarsRaw}
                 onChange={(e) => setPreviewVarsRaw(e.target.value)}
                 rows={3}
-                className="mt-1 w-full rounded-md border border-zinc-200 bg-white px-3 py-2 font-mono text-xs dark:border-zinc-700 dark:bg-zinc-900"
+                className="mt-1 font-mono text-xs"
               />
               {preview && (
                 <div className="mt-3 space-y-2 rounded-md bg-zinc-50 p-3 dark:bg-zinc-900/50">

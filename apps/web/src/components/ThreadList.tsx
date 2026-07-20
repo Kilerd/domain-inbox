@@ -3,7 +3,7 @@ import { formatDistanceToNow } from "date-fns";
 import { Archive, Inbox, Mail, Star, Trash2 } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 import { api, type Thread, type ThreadFlagsPatch } from "@/api";
-import { Button } from "@/components/ui";
+import { Button, EmptyState } from "@/components/ui";
 import { FLAG_STARRED, has } from "@/lib/flags";
 import { useInboxView } from "@/lib/inbox-view";
 import { cn } from "@/lib/utils";
@@ -118,12 +118,14 @@ export function ThreadList({ selectedThreadId, onSelect, onBulkFlags }: Props) {
         onApplied={onBulkFlags}
       />
       <div className="flex-1 overflow-y-auto overflow-x-hidden">
-        {q.isLoading && <div className="p-4 text-sm text-zinc-500">loading…</div>}
-        {q.error && <div className="p-4 text-sm text-red-600">{String(q.error)}</div>}
-        {q.data && threads.length === 0 && (
-          <div className="p-6 text-center text-sm text-zinc-500">
-            No threads in this view.
+        {q.isLoading && <div className="p-4 text-sm text-zinc-500">Loading…</div>}
+        {q.error && (
+          <div className="p-4 text-sm text-red-600 dark:text-red-400">
+            {String(q.error)}
           </div>
+        )}
+        {q.data && threads.length === 0 && (
+          <EmptyState icon={Inbox}>No threads in this view.</EmptyState>
         )}
         {threads.map((t) => (
           <ThreadRow
@@ -283,7 +285,7 @@ function ThreadRow({
           }}
           onClick={(e) => e.stopPropagation()}
           className={cn(
-            "h-3 w-3 shrink-0 cursor-pointer rounded border-zinc-300",
+            "h-3 w-3 shrink-0 cursor-pointer rounded border-zinc-300 dark:border-zinc-600",
             !selectedForBulk &&
               "opacity-0 transition-opacity group-hover:opacity-100",
           )}

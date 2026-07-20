@@ -80,16 +80,16 @@ export function AddressChips({ label, values, onChange, placeholder, autoFocus }
           "mt-1 flex min-h-[34px] flex-wrap items-center gap-1 rounded-md border bg-white px-2 py-1.5",
           "dark:bg-zinc-900",
           invalidParts.length > 0
-            ? "border-red-400 focus-within:border-red-500 focus-within:ring-1 focus-within:ring-red-500 dark:border-red-900"
+            ? "border-red-400 focus-within:border-red-500 focus-within:ring-1 focus-within:ring-red-500 dark:border-red-700"
             : "border-zinc-200 focus-within:border-blue-500 focus-within:ring-1 focus-within:ring-blue-500 dark:border-zinc-700",
         )}
       >
         {values.map((v, i) => (
           <span
             key={v + i}
-            className="inline-flex items-center gap-1 rounded bg-zinc-100 px-1.5 py-0.5 text-xs dark:bg-zinc-800"
+            className="inline-flex max-w-full items-center gap-1 rounded bg-zinc-100 px-1.5 py-0.5 text-xs dark:bg-zinc-800"
           >
-            <span className="font-mono">{v}</span>
+            <span className="truncate font-mono" title={v}>{v}</span>
             <button
               type="button"
               onClick={() => remove(i)}

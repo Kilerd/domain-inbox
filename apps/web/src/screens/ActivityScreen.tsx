@@ -26,7 +26,7 @@ import {
   type OutboundStats,
   type OutboundTimeseries,
 } from "@/api";
-import { Badge, Panel } from "@/components/ui";
+import { Badge, EmptyState, Panel, Select } from "@/components/ui";
 import { cn } from "@/lib/utils";
 
 // ── Helpers ────────────────────────────────────────────────────────────────
@@ -286,7 +286,7 @@ function SendingPane() {
     <div>
       {stats.data && <StatsRow stats={stats.data} />}
       {stats.error != null && (
-        <p className="mb-4 text-sm text-red-600">
+        <p className="mb-4 text-sm text-red-600 dark:text-red-400">
           Failed to load stats: {String(stats.error)}
         </p>
       )}
@@ -318,21 +318,21 @@ function SendingPane() {
             {list.isLoading && (
               <tr>
                 <td colSpan={5} className="px-3 py-6 text-center text-zinc-500">
-                  loading…
+                  Loading…
                 </td>
               </tr>
             )}
             {list.error != null && (
               <tr>
-                <td colSpan={5} className="px-3 py-6 text-center text-red-600">
+                <td colSpan={5} className="px-3 py-6 text-center text-red-600 dark:text-red-400">
                   Failed to load emails: {String(list.error)}
                 </td>
               </tr>
             )}
             {list.data && rows.length === 0 && (
               <tr>
-                <td colSpan={5} className="px-3 py-6 text-center text-zinc-500">
-                  No emails match these filters.
+                <td colSpan={5}>
+                  <EmptyState icon={Send}>No emails match these filters.</EmptyState>
                 </td>
               </tr>
             )}
@@ -472,24 +472,27 @@ function FilterBar({
           value={q}
           onChange={(e) => onQ(e.target.value)}
           placeholder="Search subject, from, to…"
-          className="w-full rounded-md border border-zinc-200 bg-white px-8 py-1.5 text-sm placeholder:text-zinc-400 dark:border-zinc-700 dark:bg-zinc-900"
+          className="w-full rounded-md border border-zinc-200 bg-white px-8 py-1.5 text-sm placeholder:text-zinc-400 focus:border-blue-500 focus:outline-none focus:ring-1 focus:ring-blue-500 dark:border-zinc-700 dark:bg-zinc-900 dark:placeholder:text-zinc-500"
         />
       </div>
-      <Select value={String(rangeIdx)} onChange={(v) => onRangeIdx(parseInt(v, 10))}>
+      <Select
+        value={String(rangeIdx)}
+        onChange={(e) => onRangeIdx(parseInt(e.target.value, 10))}
+      >
         {DATE_RANGES.map((r, i) => (
           <option key={r.label} value={String(i)}>
             {r.label}
           </option>
         ))}
       </Select>
-      <Select value={status} onChange={onStatus}>
+      <Select value={status} onChange={(e) => onStatus(e.target.value)}>
         {STATUS_OPTIONS.map((o) => (
           <option key={o.id || "all"} value={o.id}>
             {o.label}
           </option>
         ))}
       </Select>
-      <Select value={apiKey} onChange={onApiKey}>
+      <Select value={apiKey} onChange={(e) => onApiKey(e.target.value)}>
         <option value="">All API keys</option>
         {apiKeys.map((k) => (
           <option key={k.id} value={k.id}>
@@ -498,26 +501,6 @@ function FilterBar({
         ))}
       </Select>
     </div>
-  );
-}
-
-function Select({
-  value,
-  onChange,
-  children,
-}: {
-  value: string;
-  onChange: (v: string) => void;
-  children: React.ReactNode;
-}) {
-  return (
-    <select
-      value={value}
-      onChange={(e) => onChange(e.target.value)}
-      className="rounded-md border border-zinc-200 bg-white px-2.5 py-1.5 text-sm dark:border-zinc-700 dark:bg-zinc-900"
-    >
-      {children}
-    </select>
   );
 }
 
@@ -551,10 +534,13 @@ function ReceivingPane() {
             value={q}
             onChange={(e) => setQ(e.target.value)}
             placeholder="Search subject, from…"
-            className="w-full rounded-md border border-zinc-200 bg-white px-8 py-1.5 text-sm placeholder:text-zinc-400 dark:border-zinc-700 dark:bg-zinc-900"
+            className="w-full rounded-md border border-zinc-200 bg-white px-8 py-1.5 text-sm placeholder:text-zinc-400 focus:border-blue-500 focus:outline-none focus:ring-1 focus:ring-blue-500 dark:border-zinc-700 dark:bg-zinc-900 dark:placeholder:text-zinc-500"
           />
         </div>
-        <Select value={String(rangeIdx)} onChange={(v) => setRangeIdx(parseInt(v, 10))}>
+        <Select
+          value={String(rangeIdx)}
+          onChange={(e) => setRangeIdx(parseInt(e.target.value, 10))}
+        >
           {DATE_RANGES.map((r, i) => (
             <option key={r.label} value={String(i)}>
               {r.label}
@@ -577,21 +563,21 @@ function ReceivingPane() {
             {list.isLoading && (
               <tr>
                 <td colSpan={4} className="px-3 py-6 text-center text-zinc-500">
-                  loading…
+                  Loading…
                 </td>
               </tr>
             )}
             {list.error != null && (
               <tr>
-                <td colSpan={4} className="px-3 py-6 text-center text-red-600">
+                <td colSpan={4} className="px-3 py-6 text-center text-red-600 dark:text-red-400">
                   Failed to load inbound mail: {String(list.error)}
                 </td>
               </tr>
             )}
             {list.data && rows.length === 0 && (
               <tr>
-                <td colSpan={4} className="px-3 py-6 text-center text-zinc-500">
-                  No inbound mail in this window.
+                <td colSpan={4}>
+                  <EmptyState icon={Inbox}>No inbound mail in this window.</EmptyState>
                 </td>
               </tr>
             )}
@@ -652,14 +638,17 @@ function MetricsPane() {
   return (
     <div className="space-y-4">
       <div className="flex flex-wrap items-center justify-end gap-2">
-        <Select value={String(rangeIdx)} onChange={(v) => setRangeIdx(parseInt(v, 10))}>
+        <Select
+          value={String(rangeIdx)}
+          onChange={(e) => setRangeIdx(parseInt(e.target.value, 10))}
+        >
           {DATE_RANGES.map((r, i) => (
             <option key={r.label} value={String(i)}>
               {r.label}
             </option>
           ))}
         </Select>
-        <Select value={apiKey} onChange={setApiKey}>
+        <Select value={apiKey} onChange={(e) => setApiKey(e.target.value)}>
           <option value="">All API keys</option>
           {apiKeys.data?.map((k) => (
             <option key={k.id} value={k.id}>
@@ -670,7 +659,7 @@ function MetricsPane() {
       </div>
 
       {(stats.error != null || series.error != null) && (
-        <p className="text-sm text-red-600">
+        <p className="text-sm text-red-600 dark:text-red-400">
           Failed to load metrics: {String(stats.error ?? series.error)}
         </p>
       )}
@@ -886,7 +875,7 @@ function DetailDrawer({ id, onClose }: { id: string; onClose: () => void }) {
             <ArrowLeft className="h-3 w-3" />
             Close
           </button>
-          {detail.isLoading && <p className="text-sm text-zinc-500">loading…</p>}
+          {detail.isLoading && <p className="text-sm text-zinc-500">Loading…</p>}
           {m && (
             <>
               <div className="flex items-center justify-between gap-3">
@@ -931,7 +920,7 @@ function DetailDrawer({ id, onClose }: { id: string; onClose: () => void }) {
         </div>
         <div className="p-4">
           <Panel title="Timeline">
-            {events.isLoading && <p className="text-sm text-zinc-500">loading…</p>}
+            {events.isLoading && <p className="text-sm text-zinc-500">Loading…</p>}
             {events.data?.data.length === 0 && (
               <p className="text-sm text-zinc-500">No events yet.</p>
             )}

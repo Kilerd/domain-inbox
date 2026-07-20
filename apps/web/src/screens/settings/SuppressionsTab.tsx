@@ -2,7 +2,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { ShieldOff, Trash2 } from "lucide-react";
 import { useState } from "react";
 import { api, type Suppression } from "@/api";
-import { Badge, Button, ErrorText, Input, Panel } from "@/components/ui";
+import { Badge, Button, EmptyState, ErrorText, Input, Panel } from "@/components/ui";
 
 const REASON_FILTERS = [
   { id: "", label: "All" },
@@ -100,9 +100,11 @@ export function SuppressionsTab() {
           />
         </div>
 
-        {list.isLoading && <p className="text-sm text-zinc-500">loading…</p>}
+        {list.isLoading && <p className="text-sm text-zinc-500">Loading…</p>}
         {list.data?.length === 0 && (
-          <p className="text-sm text-zinc-500">No suppressions match this filter.</p>
+          <EmptyState icon={ShieldOff} className="py-6">
+            No suppressions match this filter.
+          </EmptyState>
         )}
         <ul className="divide-y divide-zinc-100 dark:divide-zinc-800">
           {list.data?.map((s: Suppression) => (

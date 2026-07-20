@@ -4,7 +4,7 @@ import { useEffect, useRef, useState } from "react";
 import { api, ApiError } from "@/api";
 import { AddressChips } from "@/components/AddressChips";
 import { AttachmentDropzone, type ComposeAttachment } from "@/components/AttachmentDropzone";
-import { Button, ErrorText } from "@/components/ui";
+import { Button, ErrorText, FOCUS_RING, Input, Textarea } from "@/components/ui";
 import { useCompose, type ComposePrefill } from "@/lib/compose-store";
 import { cn } from "@/lib/utils";
 
@@ -150,6 +150,8 @@ export function ComposeDrawer() {
   const [err, setErr] = useState<string | null>(null);
   // Attachment names from a restored draft whose content wasn't persisted.
   const [missingAttachments, setMissingAttachments] = useState<string[]>([]);
+  const subjectRef = useRef<HTMLInputElement>(null);
+  const bodyRef = useRef<HTMLTextAreaElement>(null);
 
   const suggestions = useQuery({
     queryKey: ["compose", "from-suggestions"],
@@ -173,6 +175,7 @@ export function ComposeDrawer() {
   useEffect(() => {
     if (!open) return;
     const saved = loadDraft(dkey);
+    const next = saved ? saved.state : emptyDraft(prefill);
     if (saved) {
       setDraft(saved.state);
       setShowCcBcc(saved.state.cc.length > 0 || saved.state.bcc.length > 0);
@@ -183,6 +186,12 @@ export function ComposeDrawer() {
       setMissingAttachments([]);
     }
     setErr(null);
+    // Focus the first empty field. An empty To autofocuses itself via
+    // AddressChips; otherwise move focus on to Subject, then Body.
+    if (next.to.length > 0) {
+      const target = next.subject.trim() ? bodyRef.current : subjectRef.current;
+      requestAnimationFrame(() => target?.focus());
+    }
   }, [open, prefill, dkey]);
 
   // Autosave whenever draft mutates.
@@ -237,6 +246,16 @@ export function ComposeDrawer() {
     onError: (e) => setErr(e instanceof ApiError ? e.message : String(e)),
   });
 
+  // Escape closes the drawer. Safe: the draft autosaves on every change.
+  useEffect(() => {
+    if (!open) return;
+    function onKey(e: KeyboardEvent) {
+      if (e.key === "Escape" && !sendMut.isPending) close();
+    }
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [open, close, sendMut.isPending]);
+
   if (!open) return null;
 
   const canSend =
@@ -255,8 +274,8 @@ export function ComposeDrawer() {
       <aside
         className={cn(
           "fixed inset-y-0 right-0 z-50 flex w-full max-w-[640px] flex-col",
-          "border-l border-zinc-200 bg-white shadow-xl",
-          "dark:border-zinc-800 dark:bg-zinc-900",
+          "border-l border-zinc-200 bg-white text-zinc-900 shadow-xl",
+          "dark:border-zinc-800 dark:bg-zinc-900 dark:text-zinc-100",
         )}
         aria-modal="true"
         role="dialog"
@@ -266,7 +285,10 @@ export function ComposeDrawer() {
           <button
             type="button"
             onClick={() => !sendMut.isPending && close()}
-            className="ml-auto rounded p-1 text-zinc-500 hover:bg-zinc-100 hover:text-zinc-800 dark:hover:bg-zinc-800 dark:hover:text-zinc-100"
+            className={cn(
+              "ml-auto rounded p-1 text-zinc-500 hover:bg-zinc-100 hover:text-zinc-800 dark:hover:bg-zinc-800 dark:hover:text-zinc-100",
+              FOCUS_RING,
+            )}
             title="Close"
           >
             <X className="h-4 w-4" />
@@ -324,12 +346,13 @@ export function ComposeDrawer() {
             <span className="block text-[11px] font-medium uppercase tracking-wide text-zinc-500">
               Subject
             </span>
-            <input
+            <Input
+              ref={subjectRef}
               type="text"
               value={draft.subject}
               onChange={(e) => setDraft((d) => ({ ...d, subject: e.target.value }))}
               placeholder="(no subject)"
-              className="mt-1 block w-full rounded-md border border-zinc-200 bg-white px-2.5 py-1.5 text-sm placeholder:text-zinc-400 focus:border-blue-500 focus:outline-none focus:ring-1 focus:ring-blue-500 dark:border-zinc-700 dark:bg-zinc-900 dark:placeholder:text-zinc-500"
+              className="mt-1"
             />
           </label>
 
@@ -365,7 +388,8 @@ export function ComposeDrawer() {
                 </button>
               </span>
             </div>
-            <textarea
+            <Textarea
+              ref={bodyRef}
               value={draft.body}
               onChange={(e) => setDraft((d) => ({ ...d, body: e.target.value }))}
               placeholder={
@@ -373,7 +397,7 @@ export function ComposeDrawer() {
                   ? "<p>Type HTML here…</p>"
                   : "Type your message…"
               }
-              className="mt-1 block min-h-[280px] w-full resize-y rounded-md border border-zinc-200 bg-white px-2.5 py-2 text-sm font-mono placeholder:text-zinc-400 focus:border-blue-500 focus:outline-none focus:ring-1 focus:ring-blue-500 dark:border-zinc-700 dark:bg-zinc-900 dark:placeholder:text-zinc-500"
+              className="mt-1 min-h-[280px] resize-y font-mono"
             />
           </div>
 
@@ -383,7 +407,7 @@ export function ComposeDrawer() {
               onChange={(attachments) => setDraft((d) => ({ ...d, attachments }))}
             />
             {missingAttachments.length > 0 && (
-              <p className="mt-1 flex items-start gap-1 text-xs text-amber-600">
+              <p className="mt-1 flex items-start gap-1 text-xs text-amber-600 dark:text-amber-400">
                 <span>
                   Attachment files aren&apos;t saved with drafts — re-add:{" "}
                   {missingAttachments.join(", ")}
@@ -391,7 +415,7 @@ export function ComposeDrawer() {
                 <button
                   type="button"
                   onClick={() => setMissingAttachments([])}
-                  className="shrink-0 underline hover:text-amber-700"
+                  className="shrink-0 underline hover:text-amber-700 dark:hover:text-amber-300"
                 >
                   dismiss
                 </button>
@@ -401,7 +425,7 @@ export function ComposeDrawer() {
 
           {err && <ErrorText>{err}</ErrorText>}
           {me.data && draft.from && !isValidFromAddress(draft.from.trim()) && (
-            <p className="mt-2 text-xs text-amber-600">
+            <p className="mt-2 text-xs text-amber-600 dark:text-amber-400">
               {draft.from.includes("@")
                 ? "`from` needs a local part before the @ (e.g. hello@domain)."
                 : "`from` looks malformed (missing @)."}
@@ -504,7 +528,10 @@ function FromField({
         <button
           type="button"
           onClick={() => setEditing((v) => !v)}
-          className="flex w-full items-center justify-between rounded-md border border-zinc-200 bg-white px-2.5 py-1.5 text-left text-sm dark:border-zinc-700 dark:bg-zinc-900"
+          className={cn(
+            "flex w-full items-center justify-between rounded-md border border-zinc-200 bg-white px-2.5 py-1.5 text-left text-sm dark:border-zinc-700 dark:bg-zinc-900",
+            FOCUS_RING,
+          )}
         >
           <span className={cn("truncate font-mono", !value && "text-zinc-400")}>
             {value || "Pick a from address"}
@@ -535,7 +562,7 @@ function FromField({
                 value={value}
                 onChange={(e) => onChange(e.target.value)}
                 placeholder="local-part@verified-domain"
-                className="mt-1 block w-full rounded border border-zinc-200 bg-white px-2 py-1 text-sm font-mono focus:border-blue-500 focus:outline-none dark:border-zinc-700 dark:bg-zinc-900"
+                className="mt-1 block w-full rounded border border-zinc-200 bg-white px-2 py-1 font-mono text-sm placeholder:text-zinc-400 focus:border-blue-500 focus:outline-none focus:ring-1 focus:ring-blue-500 dark:border-zinc-700 dark:bg-zinc-900 dark:placeholder:text-zinc-500"
               />
             </div>
           </div>

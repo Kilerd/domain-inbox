@@ -71,7 +71,7 @@ export function MembersTab() {
       </Panel>
 
       <Panel title="Members">
-        {q.isLoading && <p className="text-sm text-zinc-500">loading…</p>}
+        {q.isLoading && <p className="text-sm text-zinc-500">Loading…</p>}
         {q.error != null && <ErrorText>{String(q.error)}</ErrorText>}
         <ul className="divide-y divide-zinc-100 dark:divide-zinc-800">
           {q.data?.members.map((m) => (

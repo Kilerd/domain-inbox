@@ -90,9 +90,13 @@ export function ThreadDetail({ threadId, onFlagsChanged }: Props) {
   });
 
   if (q.isLoading)
-    return <div className="p-6 text-sm text-zinc-500">loading thread…</div>;
+    return <div className="p-6 text-sm text-zinc-500">Loading thread…</div>;
   if (q.error)
-    return <div className="p-6 text-sm text-red-600">{String(q.error)}</div>;
+    return (
+      <div className="p-6 text-sm text-red-600 dark:text-red-400">
+        {String(q.error)}
+      </div>
+    );
   if (!q.data) return null;
 
   const t = q.data.thread;
@@ -371,15 +375,15 @@ function HtmlBody({ html }: { html: string }) {
     const shadow =
       host.shadowRoot ?? host.attachShadow({ mode: "open" });
 
+    // The reading surface is white in BOTH app themes (email HTML almost
+    // always assumes a white background), so text color is fixed dark and
+    // color-scheme stays light so form controls inside emails don't invert.
     shadow.innerHTML = `
       <style>
-        :host { display: block; color-scheme: light dark; }
+        :host { display: block; color-scheme: light; }
         :host, .root {
           font: 14px/1.5 -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif;
           color: #18181b;
-        }
-        @media (prefers-color-scheme: dark) {
-          :host, .root { color: #e4e4e7; }
         }
         .root { word-break: break-word; overflow-wrap: anywhere; }
         .root img { max-width: 100%; height: auto; }
@@ -410,7 +414,7 @@ function HtmlBody({ html }: { html: string }) {
         <button
           type="button"
           onClick={() => setShowQuote((v) => !v)}
-          className="mt-1 inline-flex items-center gap-1 rounded border border-zinc-200 px-1.5 py-0.5 text-[10px] text-zinc-500 hover:bg-zinc-100 dark:border-zinc-700 dark:hover:bg-zinc-800"
+          className="mt-1 inline-flex items-center gap-1 rounded border border-zinc-200 px-1.5 py-0.5 text-[10px] text-zinc-500 hover:bg-zinc-100"
         >
           •••&nbsp;{showQuote ? "Hide quoted text" : "Show quoted text"}
         </button>
@@ -418,6 +422,22 @@ function HtmlBody({ html }: { html: string }) {
     </div>
   );
 }
+
+// The message card is a deliberate white "paper" surface in BOTH themes (see
+// HtmlBody). Controls that sit on it must keep their light-theme look even
+// when the app is dark — these dark: overrides re-pin them to light styling.
+const PAPER_BUTTON: Record<"secondary" | "ghost", string> = {
+  secondary:
+    "dark:border-zinc-300 dark:bg-white dark:text-zinc-800 dark:hover:bg-zinc-100",
+  ghost: "dark:text-zinc-700 dark:hover:bg-zinc-100",
+};
+const PAPER_BADGE: Record<string, string> = {
+  neutral: "dark:bg-zinc-100 dark:text-zinc-700",
+  success: "dark:bg-emerald-100 dark:text-emerald-700",
+  warn: "dark:bg-amber-100 dark:text-amber-700",
+  danger: "dark:bg-red-100 dark:text-red-700",
+  info: "dark:bg-blue-100 dark:text-blue-700",
+};
 
 function MessageCard({
   message,
@@ -458,8 +478,10 @@ function MessageCard({
   return (
     <div
       className={cn(
-        "rounded-lg border border-zinc-200 bg-white p-4 dark:border-zinc-800 dark:bg-zinc-900",
-        !message.is_read && "border-blue-200 dark:border-blue-900",
+        // Deliberate "paper" surface: stays white in dark mode too, because
+        // the email HTML it renders assumes a white background.
+        "rounded-lg border border-zinc-200 bg-white p-4 text-zinc-900 dark:border-zinc-700",
+        !message.is_read && "border-blue-200 dark:border-blue-700",
       )}
     >
       <button
@@ -494,8 +516,8 @@ function MessageCard({
       </button>
 
       {open && (
-        <div className="mt-3 border-t border-zinc-100 pt-3 dark:border-zinc-800">
-          {bodyQ.isLoading && <div className="text-xs text-zinc-500">loading body…</div>}
+        <div className="mt-3 border-t border-zinc-100 pt-3">
+          {bodyQ.isLoading && <div className="text-xs text-zinc-500">Loading body…</div>}
           {bodyQ.error && (
             <div className="text-xs text-red-600">{String(bodyQ.error)}</div>
           )}
@@ -504,7 +526,7 @@ function MessageCard({
               {bodyQ.data.html ? (
                 <HtmlBody html={bodyQ.data.html} />
               ) : bodyQ.data.text ? (
-                <pre className="whitespace-pre-wrap break-words font-sans text-sm leading-relaxed text-zinc-800 dark:text-zinc-200">
+                <pre className="whitespace-pre-wrap break-words font-sans text-sm leading-relaxed text-zinc-800">
                   {bodyQ.data.text}
                 </pre>
               ) : (
@@ -516,7 +538,7 @@ function MessageCard({
                     <a
                       key={a.id}
                       href={`/api/inbox/attachments/${a.id}`}
-                      className="inline-flex items-center gap-1.5 rounded border border-zinc-200 bg-zinc-50 px-2.5 py-1 text-xs hover:bg-zinc-100 dark:border-zinc-700 dark:bg-zinc-800 dark:hover:bg-zinc-700"
+                      className="inline-flex items-center gap-1.5 rounded border border-zinc-200 bg-zinc-50 px-2.5 py-1 text-xs hover:bg-zinc-100"
                     >
                       <Paperclip className="h-3 w-3" />
                       <span>{a.filename || "attachment"}</span>
@@ -529,16 +551,28 @@ function MessageCard({
                   ))}
                 </div>
               )}
-              <div className="mt-3 flex items-center gap-2 border-t border-zinc-100 pt-3 dark:border-zinc-800">
-                <Button variant="secondary" onClick={replyHandlers.reply}>
+              <div className="mt-3 flex items-center gap-2 border-t border-zinc-100 pt-3">
+                <Button
+                  variant="secondary"
+                  className={PAPER_BUTTON.secondary}
+                  onClick={replyHandlers.reply}
+                >
                   <Reply className="h-3 w-3" />
                   Reply
                 </Button>
-                <Button variant="ghost" onClick={replyHandlers.replyAll}>
+                <Button
+                  variant="ghost"
+                  className={PAPER_BUTTON.ghost}
+                  onClick={replyHandlers.replyAll}
+                >
                   <ReplyAll className="h-3 w-3" />
                   Reply all
                 </Button>
-                <Button variant="ghost" onClick={replyHandlers.forward}>
+                <Button
+                  variant="ghost"
+                  className={PAPER_BUTTON.ghost}
+                  onClick={replyHandlers.forward}
+                >
                   <Forward className="h-3 w-3" />
                   Forward
                 </Button>
@@ -579,14 +613,21 @@ function OutboundActivityPanel({ outboundId }: { outboundId: string }) {
   const m = detail.data;
   if (!m && !detail.isLoading) return null;
 
+  const tone = m ? EVENT_TONE[`email.${m.status}`] ?? "neutral" : "neutral";
+
+  // Lives on the white "paper" message card — stays light in both themes.
   return (
-    <div className="mt-3 rounded-md border border-zinc-100 bg-zinc-50 p-3 dark:border-zinc-800 dark:bg-zinc-900/50">
+    <div className="mt-3 rounded-md border border-zinc-100 bg-zinc-50 p-3">
       <div className="mb-2 flex items-center justify-between text-xs">
-        <span className="font-medium text-zinc-600 dark:text-zinc-400">Delivery activity</span>
-        {m && <Badge tone={EVENT_TONE[`email.${m.status}`] ?? "neutral"}>{m.status}</Badge>}
+        <span className="font-medium text-zinc-600">Delivery activity</span>
+        {m && (
+          <Badge tone={tone} className={PAPER_BADGE[tone]}>
+            {m.status}
+          </Badge>
+        )}
       </div>
       {m?.tracking.enabled && (
-        <div className="mb-2 flex items-center gap-3 text-xs text-zinc-600 dark:text-zinc-400">
+        <div className="mb-2 flex items-center gap-3 text-xs text-zinc-600">
           <span className="inline-flex items-center gap-1">
             <Eye className="h-3 w-3" /> {m.tracking.open_count} opens
           </span>
@@ -601,7 +642,7 @@ function OutboundActivityPanel({ outboundId }: { outboundId: string }) {
         </ol>
       )}
       {(detail.isLoading || events.isLoading) && (
-        <p className="text-xs text-zinc-500">loading…</p>
+        <p className="text-xs text-zinc-500">Loading…</p>
       )}
     </div>
   );

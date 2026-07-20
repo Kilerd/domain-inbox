@@ -128,7 +128,7 @@ export function AttachmentDropzone({ attachments, onChange }: Props) {
                 <button
                   type="button"
                   onClick={() => remove(i)}
-                  className="text-zinc-400 hover:text-red-600"
+                  className="text-zinc-400 hover:text-red-600 dark:hover:text-red-400"
                 >
                   <X className="h-3 w-3" />
                 </button>
@@ -154,7 +154,7 @@ export function AttachmentDropzone({ attachments, onChange }: Props) {
           e.target.value = "";
         }}
       />
-      {err && <p className="mt-1 text-xs text-red-600">{err}</p>}
+      {err && <p className="mt-1 text-xs text-red-600 dark:text-red-400">{err}</p>}
     </div>
   );
 }

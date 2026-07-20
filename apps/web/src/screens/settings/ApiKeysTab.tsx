@@ -2,7 +2,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Key, Trash2 } from "lucide-react";
 import { useState } from "react";
 import { api, type ApiKeyCreated } from "@/api";
-import { Badge, Button, CopyableSecret, ErrorText, Input, Panel } from "@/components/ui";
+import { Badge, Button, CopyableSecret, EmptyState, ErrorText, Input, Panel } from "@/components/ui";
 
 export function ApiKeysTab() {
   const qc = useQueryClient();
@@ -65,9 +65,9 @@ export function ApiKeysTab() {
       </Panel>
 
       <Panel title="Your API keys">
-        {keys.isLoading && <p className="text-sm text-zinc-500">loading…</p>}
+        {keys.isLoading && <p className="text-sm text-zinc-500">Loading…</p>}
         {keys.data?.length === 0 && (
-          <p className="text-sm text-zinc-500">No API keys yet.</p>
+          <EmptyState icon={Key} className="py-6">No API keys yet.</EmptyState>
         )}
         <ul className="divide-y divide-zinc-100 dark:divide-zinc-800">
           {keys.data?.map((k) => (
