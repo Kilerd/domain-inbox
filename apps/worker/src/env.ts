@@ -1,8 +1,3 @@
-// `cloudflare:email` runtime binding type. SendEmail accepts an EmailMessage.
-export interface SendEmail {
-  send(message: { from: string; to: string; raw: string | ReadableStream }): Promise<void>;
-}
-
 export interface Env {
   // Bindings
   DB: D1Database;

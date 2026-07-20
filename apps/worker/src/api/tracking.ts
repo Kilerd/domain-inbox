@@ -130,7 +130,7 @@ export async function handleOpenPixel(
   ctx?: ExecutionContext,
 ): Promise<Response> {
   const token = url.pathname.slice("/t/o/".length);
-  const raw = await env.KV.get<string>(`tok:o:${token}`, "text");
+  const raw = await env.KV.get(`tok:o:${token}`, "text");
   if (!raw) {
     return new Response(PIXEL_BYTES, {
       headers: { "content-type": "image/png", "cache-control": "no-store" },
@@ -155,13 +155,14 @@ export async function handleOpenPixel(
       .bind(payload.outbound_id, Date.now())
       .run();
   }
+  const openEventId = newId.event();
   await env.DB
     .prepare(
       `INSERT INTO events (id, owner_id, type, outbound_id, email_id, payload_json, created_at)
        VALUES (?1, ?2, 'email.opened', ?3, ?3, ?4, ?5)`,
     )
     .bind(
-      newId.event(),
+      openEventId,
       payload.owner_id,
       payload.outbound_id,
       JSON.stringify({ ua, ip: req.headers.get("cf-connecting-ip"), machine }),
@@ -172,7 +173,7 @@ export async function handleOpenPixel(
     const dispatch = fanoutEvent(env, payload.owner_id, "email.opened", {
       email_id: payload.outbound_id,
       ua,
-    });
+    }, openEventId);
     if (ctx) ctx.waitUntil(dispatch);
   }
   return new Response(PIXEL_BYTES, {
@@ -187,7 +188,7 @@ export async function handleClickRedirect(
   ctx?: ExecutionContext,
 ): Promise<Response> {
   const token = url.pathname.slice("/t/c/".length);
-  const raw = await env.KV.get<string>(`tok:c:${token}`, "text");
+  const raw = await env.KV.get(`tok:c:${token}`, "text");
   if (!raw) {
     return new Response("tracking link expired", { status: 404 });
   }
@@ -202,13 +203,14 @@ export async function handleClickRedirect(
     )
     .bind(payload.outbound_id, Date.now())
     .run();
+  const clickEventId = newId.event();
   await env.DB
     .prepare(
       `INSERT INTO events (id, owner_id, type, outbound_id, email_id, payload_json, created_at)
        VALUES (?1, ?2, 'email.clicked', ?3, ?3, ?4, ?5)`,
     )
     .bind(
-      newId.event(),
+      clickEventId,
       payload.owner_id,
       payload.outbound_id,
       JSON.stringify({
@@ -222,7 +224,7 @@ export async function handleClickRedirect(
   const dispatch = fanoutEvent(env, payload.owner_id, "email.clicked", {
     email_id: payload.outbound_id,
     url: payload.url,
-  });
+  }, clickEventId);
   if (ctx) ctx.waitUntil(dispatch);
   return new Response(null, {
     status: 302,

@@ -27,13 +27,16 @@ interface MessageForThread {
 }
 
 async function findThreadByMessageId(env: Env, ownerId: string, rfc822Id: string): Promise<string | null> {
+  // rfc822_message_id is stored bare; strip angle brackets defensively so a
+  // caller passing a raw header token (`<id@host>`) still matches.
+  const bare = rfc822Id.replace(/^<|>$/g, "");
   const r = await env.DB
     .prepare(
       `SELECT thread_id FROM messages
        WHERE rfc822_message_id = ?1 AND owner_id = ?2 AND thread_id IS NOT NULL
        LIMIT 1`,
     )
-    .bind(rfc822Id, ownerId)
+    .bind(bare, ownerId)
     .first<{ thread_id: string | null }>();
   return r?.thread_id ?? null;
 }
@@ -72,16 +75,32 @@ export async function assignThread(env: Env, messageId: string): Promise<void> {
   const norm = normalizeSubject(msg.subject);
 
   if (!threadId && norm) {
+    // Fuzzy fallback: same normalized subject within 14 days — but only when
+    // the candidate thread shares a participant with this message, so two
+    // unrelated senders both titled "hello" don't get merged.
+    const msgAddrs = new Set<string>();
+    if (msg.from_addr) msgAddrs.add(msg.from_addr);
+    if (msg.to_json) (JSON.parse(msg.to_json) as string[]).forEach((a) => msgAddrs.add(a));
+    if (msg.cc_json) (JSON.parse(msg.cc_json) as string[]).forEach((a) => msgAddrs.add(a));
+
     const cutoff = (msg.received_at ?? Date.now()) - FOURTEEN_DAYS_MS;
-    const r = await env.DB
+    const candidates = await env.DB
       .prepare(
-        `SELECT id FROM threads
+        `SELECT id, participants_json FROM threads
          WHERE owner_id = ?1 AND subject_normalized = ?2 AND last_message_at >= ?3
-         ORDER BY last_message_at DESC LIMIT 1`,
+         ORDER BY last_message_at DESC LIMIT 5`,
       )
       .bind(msg.owner_id, norm, cutoff)
-      .first<{ id: string }>();
-    if (r) threadId = r.id;
+      .all<{ id: string; participants_json: string | null }>();
+    for (const cand of candidates.results ?? []) {
+      const participants: string[] = cand.participants_json
+        ? JSON.parse(cand.participants_json)
+        : [];
+      if (participants.some((p) => msgAddrs.has(p))) {
+        threadId = cand.id;
+        break;
+      }
+    }
   }
 
   const now = msg.received_at ?? Date.now();

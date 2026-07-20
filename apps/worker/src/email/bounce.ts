@@ -14,7 +14,7 @@ import { newId } from "../ids";
 import { log } from "../utils/log";
 import { fanoutEvent } from "../webhooks/dispatch";
 
-export type BounceType = "hard" | "soft" | "complaint" | "unknown";
+export type BounceType = "hard" | "soft" | "complaint" | "delivered" | "unknown";
 
 export interface ParsedDsn {
   kind: "dsn" | "arf" | null;
@@ -27,8 +27,10 @@ export interface ParsedDsn {
   diagnosticCode: string | null;
 }
 
-const RE_DSN = /^content-type:\s*multipart\/report\s*;\s*report-type=delivery-status/im;
-const RE_ARF = /^content-type:\s*multipart\/report\s*;\s*report-type=feedback-report/im;
+// Content-Type params come in any order (`boundary` frequently precedes
+// `report-type`) and the value may be quoted — match anywhere in the header line.
+const RE_DSN = /^content-type:\s*multipart\/report\s*;[^\r\n]*report-type\s*=\s*"?delivery-status"?/im;
+const RE_ARF = /^content-type:\s*multipart\/report\s*;[^\r\n]*report-type\s*=\s*"?feedback-report"?/im;
 const RE_FINAL_RECIPIENT = /^final-recipient:\s*[^;]+;\s*([^\r\n]+)/im;
 const RE_ORIGINAL_RECIPIENT = /^original-recipient:\s*[^;]+;\s*([^\r\n]+)/im;
 const RE_STATUS = /^status:\s*(\d\.\d+\.\d+)/im;
@@ -70,8 +72,12 @@ export function parseDsn(rawEml: string): ParsedDsn {
   if (isArf) bounceType = "complaint";
   else if (status?.startsWith("5.")) bounceType = "hard";
   else if (status?.startsWith("4.")) bounceType = "soft";
+  else if (status?.startsWith("2.")) bounceType = "delivered";
   else if (action === "failed") bounceType = "hard";
   else if (action === "delayed") bounceType = "soft";
+  else if (action === "delivered" || action === "relayed" || action === "expanded") {
+    bounceType = "delivered";
+  }
 
   return {
     kind: isArf ? "arf" : "dsn",
@@ -88,6 +94,7 @@ interface OutboundRow {
   id: string;
   owner_id: string;
   current_status: string;
+  request_json: string;
 }
 
 /**
@@ -109,7 +116,8 @@ export async function tryProcessBounce(
   // is what handleEmailSend writes when persisting the outbound row.
   const outbound = await env.DB
     .prepare(
-      `SELECT om.id AS id, om.owner_id AS owner_id, om.status AS current_status
+      `SELECT om.id AS id, om.owner_id AS owner_id, om.status AS current_status,
+              om.request_json AS request_json
        FROM outbound_messages om
        LEFT JOIN messages m ON m.id = om.rendered_message_id
        WHERE m.rfc822_message_id = ?1
@@ -126,6 +134,21 @@ export async function tryProcessBounce(
     return null;
   }
 
+  // Recipient: DSN/ARF reports (ARF especially) frequently omit
+  // Final-Recipient; fall back to the outbound's first To so complaints still
+  // reach the suppression list.
+  let recipient = dsn.finalRecipient;
+  if (!recipient) {
+    try {
+      const reqBody = JSON.parse(outbound.request_json) as { to?: unknown };
+      const first = Array.isArray(reqBody.to) ? reqBody.to[0] : reqBody.to;
+      const m = typeof first === "string" ? first.match(/<?([^\s<>]+@[^\s<>]+)>?\s*$/) : null;
+      if (m) recipient = m[1]!.toLowerCase();
+    } catch {
+      // keep null
+    }
+  }
+
   const eventType =
     dsn.kind === "arf"
       ? "email.complained"
@@ -133,44 +156,57 @@ export async function tryProcessBounce(
         ? "email.bounced"
         : dsn.bounceType === "soft"
           ? "email.delivery_delayed"
-          : "email.failed";
+          : dsn.bounceType === "delivered"
+            ? "email.delivered"
+            : "email.failed";
 
   // Map back to a terminal-or-pending outbound_messages.status. Soft bounces
   // remain "sent" but we still emit the delivery_delayed event for visibility.
+  // Success DSNs upgrade "sent" → "delivered" and must NOT write bounce fields.
   const newStatus =
     dsn.kind === "arf"
       ? "complained"
       : dsn.bounceType === "hard"
         ? "bounced"
-        : outbound.current_status; // keep "sent" for soft
+        : dsn.bounceType === "delivered" && outbound.current_status === "sent"
+          ? "delivered"
+          : outbound.current_status;
 
-  await env.DB
-    .prepare(
-      `UPDATE outbound_messages
-       SET status = ?2, bounced_at = ?3, bounce_type = ?4, bounce_diag = ?5
-       WHERE id = ?1`,
-    )
-    .bind(
-      outbound.id,
-      newStatus,
-      Date.now(),
-      dsn.kind === "arf" ? "complaint" : dsn.bounceType,
-      dsn.diagnosticCode,
-    )
-    .run();
+  if (dsn.kind === "arf" || dsn.bounceType === "hard") {
+    await env.DB
+      .prepare(
+        `UPDATE outbound_messages
+         SET status = ?2, bounced_at = ?3, bounce_type = ?4, bounce_diag = ?5
+         WHERE id = ?1`,
+      )
+      .bind(
+        outbound.id,
+        newStatus,
+        Date.now(),
+        dsn.kind === "arf" ? "complaint" : dsn.bounceType,
+        dsn.diagnosticCode,
+      )
+      .run();
+  } else {
+    await env.DB
+      .prepare(`UPDATE outbound_messages SET status = ?2 WHERE id = ?1`)
+      .bind(outbound.id, newStatus)
+      .run();
+  }
 
+  const eventId = newId.event();
   await env.DB
     .prepare(
       `INSERT INTO events (id, owner_id, type, outbound_id, email_id, payload_json, created_at)
        VALUES (?1, ?2, ?3, ?4, ?4, ?5, ?6)`,
     )
     .bind(
-      newId.event(),
+      eventId,
       outbound.owner_id,
       eventType,
       outbound.id,
       JSON.stringify({
-        recipient: dsn.finalRecipient,
+        recipient,
         status: dsn.status,
         action: dsn.action,
         diagnostic: dsn.diagnosticCode,
@@ -181,7 +217,7 @@ export async function tryProcessBounce(
     .run();
 
   // Auto-suppress hard bounces and complaints.
-  if ((dsn.bounceType === "hard" || dsn.kind === "arf") && dsn.finalRecipient) {
+  if ((dsn.bounceType === "hard" || dsn.kind === "arf") && recipient) {
     await env.DB
       .prepare(
         `INSERT INTO suppressions (id, owner_id, email, reason, source_outbound_id, created_at)
@@ -191,7 +227,7 @@ export async function tryProcessBounce(
       .bind(
         newId.suppression(),
         outbound.owner_id,
-        dsn.finalRecipient,
+        recipient,
         dsn.kind === "arf" ? "complaint" : "hard_bounce",
         outbound.id,
         Date.now(),
@@ -202,13 +238,13 @@ export async function tryProcessBounce(
   ctx.waitUntil(
     fanoutEvent(env, outbound.owner_id, eventType, {
       email_id: outbound.id,
-      recipient: dsn.finalRecipient,
+      recipient,
       bounce: {
         type: dsn.bounceType,
         status: dsn.status,
         diagnostic: dsn.diagnosticCode,
       },
-    }),
+    }, eventId),
   );
 
   log.info("bounce.processed", {
@@ -216,7 +252,7 @@ export async function tryProcessBounce(
     event_type: eventType,
     bounce_type: dsn.bounceType,
     status: dsn.status,
-    recipient: dsn.finalRecipient,
+    recipient,
   });
 
   return { outbound_id: outbound.id, event_type: eventType };

@@ -56,9 +56,62 @@ interface WebhookPayload {
   data: Record<string, unknown>;
 }
 
+const FETCH_TIMEOUT_MS = 10_000;
+const MAX_ATTEMPTS = 5;
+// Backoff after attempt N (1-based): 5m, 30m, 2h, 5h. Attempt 5 failing → dead.
+const RETRY_DELAYS_MS = [5 * 60_000, 30 * 60_000, 2 * 3600_000, 5 * 3600_000];
+
+interface AttemptResult {
+  ok: boolean;
+  code: number | null;
+  err: string | null;
+}
+
+/** One signed POST to an endpoint. Never throws. */
+async function attemptDelivery(
+  secret: string,
+  url: string,
+  msgId: string,
+  body: string,
+): Promise<AttemptResult> {
+  try {
+    const timestamp = Math.floor(Date.now() / 1000);
+    const signature = await svixSign(secret, msgId, timestamp, body);
+    const res = await fetch(url, {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        "svix-id": msgId,
+        "svix-timestamp": String(timestamp),
+        "svix-signature": signature,
+        "webhook-id": msgId,
+        "webhook-timestamp": String(timestamp),
+        "webhook-signature": signature,
+        "user-agent": "domain-inbox-webhooks/1.0",
+      },
+      body,
+      // A subscriber that accepts the connection and never responds must not
+      // stall the fanout loop (or, worse, the whole waitUntil budget).
+      signal: AbortSignal.timeout(FETCH_TIMEOUT_MS),
+    });
+    return {
+      ok: res.ok,
+      code: res.status,
+      err: res.ok ? null : `upstream ${res.status}`,
+    };
+  } catch (e) {
+    return { ok: false, code: null, err: String((e as Error)?.message ?? e) };
+  }
+}
+
 /**
  * Fan out an event to all of the owner's enabled webhook endpoints subscribed
- * to the event type. Records each delivery attempt in webhook_deliveries.
+ * to the event type. Records each delivery attempt in webhook_deliveries;
+ * failures are scheduled for retry by the cron-driven
+ * retryPendingWebhookDeliveries.
+ *
+ * `eventId` is the events-table row id (for audit joins); pass null when no
+ * event row exists.
  *
  * Caller should wrap the returned promise with ctx.waitUntil to avoid blocking
  * the request hot path.
@@ -68,6 +121,7 @@ export async function fanoutEvent(
   ownerId: string,
   type: string,
   data: Record<string, unknown>,
+  eventId: string | null = null,
 ): Promise<void> {
   const endpoints = await env.DB
     .prepare(
@@ -93,61 +147,133 @@ export async function fanoutEvent(
     }
     if (!events.includes(type)) continue;
 
-    const msgId = newId.webhookMessage();
-    const timestamp = Math.floor(Date.now() / 1000);
-    const signature = await svixSign(ep.secret, msgId, timestamp, body);
-    const deliveryId = newId.webhookDelivery();
-    const now = Date.now();
-
-    let status: "sent" | "failed" = "failed";
-    let code: number | null = null;
-    let err: string | null = null;
+    // Per-endpoint isolation: one endpoint with a bad secret or URL must not
+    // abort delivery to the remaining endpoints.
     try {
-      const res = await fetch(ep.url, {
-        method: "POST",
-        headers: {
-          "content-type": "application/json",
-          "svix-id": msgId,
-          "svix-timestamp": String(timestamp),
-          "svix-signature": signature,
-          "webhook-id": msgId,
-          "webhook-timestamp": String(timestamp),
-          "webhook-signature": signature,
-          "user-agent": "domain-inbox-webhooks/1.0",
-        },
-        body,
+      const msgId = newId.webhookMessage();
+      const deliveryId = newId.webhookDelivery();
+      const result = await attemptDelivery(ep.secret, ep.url, msgId, body);
+      const now = Date.now();
+
+      await env.DB
+        .prepare(
+          `INSERT INTO webhook_deliveries
+             (id, endpoint_id, event_id, event_type, payload_json, svix_msg_id,
+              status, response_code, attempts, next_retry_at, last_error,
+              created_at, delivered_at)
+           VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, 1, ?9, ?10, ?11, ?12)`,
+        )
+        .bind(
+          deliveryId,
+          ep.id,
+          eventId,
+          type,
+          body,
+          msgId,
+          result.ok ? "sent" : "failed",
+          result.code,
+          result.ok ? null : Date.now() + RETRY_DELAYS_MS[0]!,
+          result.err,
+          now,
+          result.ok ? now : null,
+        )
+        .run();
+
+      log.info("webhook.delivered", {
+        delivery_id: deliveryId,
+        endpoint_id: ep.id,
+        event_type: type,
+        status: result.ok ? "sent" : "failed",
+        response_code: result.code,
+        error: result.err,
       });
-      code = res.status;
-      status = res.ok ? "sent" : "failed";
-      if (!res.ok) err = `upstream ${res.status}`;
     } catch (e) {
-      err = String((e as Error)?.message ?? e);
+      log.warn("webhook.fanout_endpoint_failed", {
+        endpoint_id: ep.id,
+        event_type: type,
+        error: String(e),
+      });
     }
+  }
+}
+
+interface RetryRow {
+  id: string;
+  endpoint_id: string;
+  svix_msg_id: string | null;
+  payload_json: string | null;
+  attempts: number;
+  url: string;
+  secret: string;
+  enabled: number;
+}
+
+/**
+ * Cron entry point: re-attempt failed deliveries whose next_retry_at has
+ * passed. Keeps the svix msg id stable across attempts (Standard Webhooks
+ * semantics) while signing with a fresh timestamp. After MAX_ATTEMPTS the
+ * delivery is marked dead.
+ */
+export async function retryPendingWebhookDeliveries(env: Env): Promise<void> {
+  const now = Date.now();
+  const due = await env.DB
+    .prepare(
+      `SELECT wd.id, wd.endpoint_id, wd.svix_msg_id, wd.payload_json, wd.attempts,
+              ep.url, ep.secret, ep.enabled
+       FROM webhook_deliveries wd
+       JOIN webhook_endpoints ep ON ep.id = wd.endpoint_id
+       WHERE wd.status IN ('pending', 'failed')
+         AND wd.attempts < ?1
+         AND wd.next_retry_at IS NOT NULL
+         AND wd.next_retry_at <= ?2
+       ORDER BY wd.next_retry_at
+       LIMIT 50`,
+    )
+    .bind(MAX_ATTEMPTS, now)
+    .all<RetryRow>();
+
+  for (const row of due.results ?? []) {
+    // Endpoint disabled since, or a pre-0007 row without a payload snapshot:
+    // nothing useful to retry.
+    if (!row.enabled || !row.payload_json) {
+      await env.DB
+        .prepare(`UPDATE webhook_deliveries SET status = 'dead' WHERE id = ?1`)
+        .bind(row.id)
+        .run();
+      continue;
+    }
+
+    const msgId = row.svix_msg_id ?? newId.webhookMessage();
+    const result = await attemptDelivery(row.secret, row.url, msgId, row.payload_json);
+    const attempts = row.attempts + 1;
+    const exhausted = !result.ok && attempts >= MAX_ATTEMPTS;
+    const nextDelay = RETRY_DELAYS_MS[Math.min(attempts - 1, RETRY_DELAYS_MS.length - 1)]!;
 
     await env.DB
       .prepare(
-        `INSERT INTO webhook_deliveries
-           (id, endpoint_id, event_id, status, response_code, attempts, created_at, delivered_at)
-         VALUES (?1, ?2, ?3, ?4, ?5, 1, ?6, ?7)`,
+        `UPDATE webhook_deliveries
+         SET status = ?2, response_code = ?3, attempts = ?4,
+             next_retry_at = ?5, last_error = ?6, delivered_at = ?7
+         WHERE id = ?1`,
       )
       .bind(
-        deliveryId,
-        ep.id,
-        msgId,
-        status,
-        code,
-        now,
-        status === "sent" ? now : null,
+        row.id,
+        result.ok ? "sent" : exhausted ? "dead" : "failed",
+        result.code,
+        attempts,
+        result.ok || exhausted ? null : Date.now() + nextDelay,
+        result.err,
+        result.ok ? Date.now() : null,
       )
       .run();
 
-    log.info("webhook.delivered", {
-      delivery_id: deliveryId,
-      endpoint_id: ep.id,
-      event_type: type,
-      status,
-      response_code: code,
-      error: err,
+    log.info("webhook.retried", {
+      delivery_id: row.id,
+      endpoint_id: row.endpoint_id,
+      attempts,
+      status: result.ok ? "sent" : exhausted ? "dead" : "failed",
+      response_code: result.code,
+      error: result.err,
     });
   }
 }

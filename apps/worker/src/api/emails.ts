@@ -122,36 +122,10 @@ export async function handleEmailSend(
     return httpError.validation("one of `html` or `text` is required");
   }
 
-  const from = parseAddr(body.from);
-  const to = asAddrList(body.to);
-  const cc = asAddrList(body.cc);
-  const bcc = asAddrList(body.bcc);
-  const replyTo = asAddrList(body.reply_to);
+  const prep = await prepareSendContext(env, key.user_id, body);
+  if (prep.kind === "error") return prep.response;
+  const { from, to, cc, bcc, fromDomain, dom, tracking } = prep;
 
-  if (to.length === 0) {
-    return httpError.validation("`to` must include at least one recipient");
-  }
-  if (to.length + cc.length + bcc.length > 50) {
-    return httpError.validation("too many recipients (max 50)");
-  }
-  const bad = firstInvalid([from, ...to, ...cc, ...bcc, ...replyTo]);
-  if (bad) return httpError.validation(`invalid address: ${bad}`);
-
-  const fromDomain = domainOf(from.addr);
-  if (!fromDomain) return httpError.validation("`from` address is malformed");
-  const dom = await env.DB
-    .prepare(
-      `SELECT id, verification_status, open_tracking, click_tracking
-       FROM domains WHERE owner_id = ?1 AND domain = ?2`,
-    )
-    .bind(key.user_id, fromDomain)
-    .first<DomainRow>();
-  if (!dom) {
-    return httpError.validation(`from domain ${fromDomain} not registered`);
-  }
-  if (dom.verification_status !== "verified") {
-    return httpError.validation(`from domain ${fromDomain} is not verified yet`);
-  }
   if (
     key.domain_scope &&
     !key.domain_scope.includes(dom.id) &&
@@ -160,45 +134,174 @@ export async function handleEmailSend(
     return httpError.forbidden(`API key not scoped to send from ${fromDomain}`);
   }
 
-  // Suppression pre-flight: block sends to addresses on the owner's hard-bounce
-  // / complaint / manual suppression list. Better to fail explicitly than to
-  // burn deliverability re-sending to a known-bad address.
-  const allRcpts = [...to, ...cc, ...bcc].map((a) => a.addr);
-  const blocked = await suppressionHits(env, key.user_id, allRcpts);
-  if (blocked.length) {
-    return httpError.validation(
-      `recipient(s) on suppression list: ${blocked.join(", ")}`,
-    );
-  }
-
-  // Idempotency: return prior outbound id on replay.
+  // Idempotency: return prior outbound id on replay. The KV entry is only
+  // written after a *successful* send, so a KV hit is always replayable as
+  // 200. A DB hit can be an in-flight or failed attempt: in-flight replays
+  // return the same id; failed attempts release the key so the client's
+  // retry actually re-sends instead of replaying the failure as success.
   if (idempotencyKey) {
-    const cached = await env.KV.get<string>(
+    const cached = await env.KV.get(
       `idem:${key.user_id}:${idempotencyKey}`,
       "text",
     );
     if (cached) return Response.json({ id: cached });
     const existing = await env.DB
       .prepare(
-        `SELECT id FROM outbound_messages WHERE owner_id = ?1 AND idempotency_key = ?2`,
+        `SELECT id, status FROM outbound_messages WHERE owner_id = ?1 AND idempotency_key = ?2`,
       )
       .bind(key.user_id, idempotencyKey)
-      .first<{ id: string }>();
-    if (existing) {
+      .first<{ id: string; status: string }>();
+    if (existing && existing.status !== "failed") {
       await env.KV.put(`idem:${key.user_id}:${idempotencyKey}`, existing.id, {
         expirationTtl: 86400,
       });
       return Response.json({ id: existing.id });
     }
+    if (existing) {
+      await env.DB
+        .prepare(
+          `UPDATE outbound_messages SET idempotency_key = NULL WHERE id = ?1 AND status = 'failed'`,
+        )
+        .bind(existing.id)
+        .run();
+    }
   }
 
   const outboundId = newId.outbound();
-  const messageId = newId.message();
-  // We mint the RFC-5322 Message-ID up front so it goes into the outgoing MIME
-  // headers AND is what we persist; this is also what subsequent replies will
-  // reference via In-Reply-To, so it needs to be stable.
-  const rfc822MessageId = `${messageId}@${fromDomain}`;
   const now = Date.now();
+  const trackingFlag = tracking.opens || tracking.clicks ? 1 : 0;
+
+  // Scheduling: a future scheduled_at defers the actual send to the cron
+  // sweep (processScheduledSends); the row is created in status 'scheduled'.
+  let scheduledAt: number | null = null;
+  if (typeof body.scheduled_at === "string" && body.scheduled_at.trim()) {
+    const ts = Date.parse(body.scheduled_at);
+    if (Number.isNaN(ts)) {
+      return httpError.validation("scheduled_at could not be parsed");
+    }
+    if (ts > now + 30_000) scheduledAt = ts;
+  }
+
+  // Pre-record so failures are observable. UNIQUE(owner_id, idempotency_key)
+  // doubles as the atomic idempotency reservation: a concurrent duplicate
+  // loses the insert race and is answered with the winner's id.
+  try {
+    await env.DB
+      .prepare(
+        `INSERT INTO outbound_messages
+           (id, owner_id, api_key_id, idempotency_key, status, channel,
+            request_json, attempts, template_id, tracking_enabled, scheduled_at, created_at)
+         VALUES (?1, ?2, ?3, ?4, ?9, 'cf_native', ?5, 0, ?6, ?7, ?10, ?8)`,
+      )
+      .bind(
+        outboundId,
+        key.user_id,
+        key.key_id,
+        idempotencyKey ?? null,
+        JSON.stringify(body),
+        templateId,
+        trackingFlag,
+        now,
+        scheduledAt ? "scheduled" : "sending",
+        scheduledAt,
+      )
+      .run();
+  } catch (err) {
+    if (idempotencyKey && /UNIQUE constraint failed/i.test(String(err))) {
+      const winner = await env.DB
+        .prepare(
+          `SELECT id FROM outbound_messages WHERE owner_id = ?1 AND idempotency_key = ?2`,
+        )
+        .bind(key.user_id, idempotencyKey)
+        .first<{ id: string }>();
+      if (winner) return Response.json({ id: winner.id });
+    }
+    throw err;
+  }
+
+  if (scheduledAt) {
+    return Response.json({ id: outboundId });
+  }
+
+  return executeSend(env, ctx, key.user_id, body, {
+    outboundId,
+    idempotencyKey,
+    from,
+    to,
+    cc,
+    bcc,
+    replyTo: prep.replyTo,
+    fromDomain,
+    dom,
+    tracking,
+  });
+}
+
+interface PreparedSend {
+  kind: "ok";
+  from: Addr;
+  to: Addr[];
+  cc: Addr[];
+  bcc: Addr[];
+  replyTo: Addr[];
+  fromDomain: string;
+  dom: DomainRow;
+  tracking: { opens: boolean; clicks: boolean };
+}
+
+// Validate addressing / domain / suppressions and resolve the tracking plan
+// for a send request. Shared by the HTTP path and the cron sweep for
+// scheduled sends (which re-validates at actual send time).
+async function prepareSendContext(
+  env: Env,
+  userId: string,
+  body: SendEmailBody,
+): Promise<PreparedSend | { kind: "error"; message: string; response: Response }> {
+  const fail = (message: string) => ({
+    kind: "error" as const,
+    message,
+    response: httpError.validation(message),
+  });
+
+  const from = parseAddr(body.from as string);
+  const to = asAddrList(body.to);
+  const cc = asAddrList(body.cc);
+  const bcc = asAddrList(body.bcc);
+  const replyTo = asAddrList(body.reply_to);
+
+  if (to.length === 0) {
+    return fail("`to` must include at least one recipient");
+  }
+  if (to.length + cc.length + bcc.length > 50) {
+    return fail("too many recipients (max 50)");
+  }
+  const bad = firstInvalid([from, ...to, ...cc, ...bcc, ...replyTo]);
+  if (bad) return fail(`invalid address: ${bad}`);
+
+  const fromDomain = domainOf(from.addr);
+  if (!fromDomain) return fail("`from` address is malformed");
+  const dom = await env.DB
+    .prepare(
+      `SELECT id, verification_status, open_tracking, click_tracking
+       FROM domains WHERE owner_id = ?1 AND domain = ?2`,
+    )
+    .bind(userId, fromDomain)
+    .first<DomainRow>();
+  if (!dom) {
+    return fail(`from domain ${fromDomain} not registered`);
+  }
+  if (dom.verification_status !== "verified") {
+    return fail(`from domain ${fromDomain} is not verified yet`);
+  }
+
+  // Suppression pre-flight: block sends to addresses on the owner's hard-bounce
+  // / complaint / manual suppression list. Better to fail explicitly than to
+  // burn deliverability re-sending to a known-bad address.
+  const allRcpts = [...to, ...cc, ...bcc].map((a) => a.addr);
+  const blocked = await suppressionHits(env, userId, allRcpts);
+  if (blocked.length) {
+    return fail(`recipient(s) on suppression list: ${blocked.join(", ")}`);
+  }
 
   // Resolve tracking plan up-front so the outbound_messages row records the
   // intended setting even if the HTML rewrite happens to be a no-op (e.g.
@@ -217,41 +320,54 @@ export async function handleEmailSend(
         ? Boolean(dom.click_tracking)
         : Boolean(reqTracking.clicks),
   };
-  const trackingFlag = tracking.opens || tracking.clicks ? 1 : 0;
 
-  // Pre-record so failures are observable.
-  await env.DB
-    .prepare(
-      `INSERT INTO outbound_messages
-         (id, owner_id, api_key_id, idempotency_key, status, channel,
-          request_json, attempts, template_id, tracking_enabled, created_at)
-       VALUES (?1, ?2, ?3, ?4, 'sending', 'cf_native', ?5, 0, ?6, ?7, ?8)`,
-    )
-    .bind(
-      outboundId,
-      key.user_id,
-      key.key_id,
-      idempotencyKey ?? null,
-      JSON.stringify(body),
-      templateId,
-      trackingFlag,
-      now,
-    )
-    .run();
-  if (idempotencyKey) {
-    await env.KV.put(`idem:${key.user_id}:${idempotencyKey}`, outboundId, {
-      expirationTtl: 86400,
-    });
+  return { kind: "ok", from, to, cc, bcc, replyTo, fromDomain, dom, tracking };
+}
+
+interface SendContext {
+  outboundId: string;
+  idempotencyKey: string | null;
+  from: Addr;
+  to: Addr[];
+  cc: Addr[];
+  bcc: Addr[];
+  replyTo: Addr[];
+  fromDomain: string;
+  dom: DomainRow;
+  tracking: { opens: boolean; clicks: boolean };
+}
+
+// The actual send: MIME build, per-recipient envelope sends, status update,
+// inbox persistence, events + webhook fanout. The outbound_messages row must
+// already exist in status 'sending'.
+async function executeSend(
+  env: Env,
+  ctx: ExecutionContext | undefined,
+  userId: string,
+  body: SendEmailBody,
+  sc: SendContext,
+): Promise<Response> {
+  if (!env.EMAIL) {
+    return httpError.internal(
+      "send_email binding not configured (Workers Paid plan + verified domain required)",
+      503,
+    );
   }
+  const { outboundId, idempotencyKey, from, to, cc, bcc, replyTo, fromDomain, dom, tracking } = sc;
+  const messageId = newId.message();
+  // We mint the RFC-5322 Message-ID at actual send time so it goes into the
+  // outgoing MIME headers AND is what we persist; subsequent replies will
+  // reference it via In-Reply-To, so it needs to be stable from here on.
+  const rfc822MessageId = `${messageId}@${fromDomain}`;
+  const now = Date.now();
 
-  // HTML rewrite for tracking (pixel + click wrappers). Tracking plan was
-  // resolved before the outbound_messages insert above; this step generates
+  // HTML rewrite for tracking (pixel + click wrappers). This step generates
   // KV token rows tied to the outbound_id and mutates body.html in place.
   if (typeof body.html === "string" && (tracking.opens || tracking.clicks)) {
     body.html = await rewriteHtmlForTracking(
       body.html,
       env,
-      key.user_id,
+      userId,
       outboundId,
       tracking,
     );
@@ -264,10 +380,10 @@ export async function handleEmailSend(
   if (to.length === 1) {
     mime.setTo(to[0]!.name ? { name: to[0]!.name!, addr: to[0]!.addr } : to[0]!.addr);
   } else {
-    mime.setTo(to.map((a) => (a.name ? { name: a.name, addr: a.addr } : a.addr)));
+    mime.setTo(to.map((a) => (a.name ? { name: a.name, addr: a.addr } : { addr: a.addr })));
   }
   if (cc.length) {
-    mime.setCc(cc.map((a) => (a.name ? { name: a.name, addr: a.addr } : a.addr)));
+    mime.setCc(cc.map((a) => (a.name ? { name: a.name, addr: a.addr } : { addr: a.addr })));
   }
   if (replyTo.length) {
     mime.setHeader("Reply-To", replyTo.map((a) => a.addr).join(", "));
@@ -328,6 +444,13 @@ export async function handleEmailSend(
       status === "sent" ? Date.now() : null,
     )
     .run();
+  // Cache the idempotency mapping only for successful sends; failed attempts
+  // must stay retryable under the same key.
+  if (idempotencyKey && status === "sent") {
+    await env.KV.put(`idem:${userId}:${idempotencyKey}`, outboundId, {
+      expirationTtl: 86400,
+    });
+  }
 
   // Persist the sent mail into messages/threads so it appears in the inbox
   // alongside inbound mail, and replies can pull the original from R2.
@@ -339,7 +462,7 @@ export async function handleEmailSend(
       httpMetadata: { contentType: "message/rfc822" },
       customMetadata: {
         msg_id: messageId,
-        owner_id: key.user_id,
+        owner_id: userId,
         from: from.addr,
         outbound_id: outboundId,
       },
@@ -378,7 +501,7 @@ export async function handleEmailSend(
       )
       .bind(
         messageId,
-        key.user_id,
+        userId,
         dom.id,
         rfc822MessageId,
         typeof inReplyToHeader === "string" ? inReplyToHeader.replace(/^<|>$/g, "") : null,
@@ -405,21 +528,17 @@ export async function handleEmailSend(
       .run();
 
     await assignThread(env, messageId);
-
-    // SSE beacon so any open inbox tab refreshes.
-    await env.KV.put(`inbox:lastUpdate:${key.user_id}`, String(Date.now()), {
-      expirationTtl: 86400,
-    });
   }
 
+  const sendEventId = newId.event();
   await env.DB
     .prepare(
       `INSERT INTO events (id, owner_id, type, outbound_id, email_id, payload_json, created_at)
        VALUES (?1, ?2, ?3, ?4, ?4, ?5, ?6)`,
     )
     .bind(
-      newId.event(),
-      key.user_id,
+      sendEventId,
+      userId,
       status === "sent" ? "email.sent" : "email.failed",
       outboundId,
       JSON.stringify({ recipients: envelopeRcpts, error: lastError }),
@@ -435,7 +554,7 @@ export async function handleEmailSend(
     subject: typeof body.subject === "string" ? body.subject : "",
     last_error: lastError,
   };
-  const dispatch = fanoutEvent(env, key.user_id, webhookEvent, webhookData);
+  const dispatch = fanoutEvent(env, userId, webhookEvent, webhookData, sendEventId);
   if (ctx) {
     ctx.waitUntil(dispatch);
   } else {
@@ -454,6 +573,65 @@ export async function handleEmailSend(
   }
   // Resend returns just { id }.
   return Response.json({ id: outboundId });
+}
+
+/**
+ * Cron entry point: send outbound_messages whose scheduled_at has arrived.
+ * Rows are claimed with a guarded status flip so overlapping cron invocations
+ * (or a cron racing a PATCH/cancel) never double-send.
+ */
+export async function processScheduledSends(env: Env, ctx: ExecutionContext): Promise<void> {
+  if (!env.EMAIL) return;
+  const due = await env.DB
+    .prepare(
+      `SELECT id, owner_id, request_json FROM outbound_messages
+       WHERE status = 'scheduled' AND scheduled_at IS NOT NULL AND scheduled_at <= ?1
+       ORDER BY scheduled_at LIMIT 20`,
+    )
+    .bind(Date.now())
+    .all<{ id: string; owner_id: string; request_json: string }>();
+
+  for (const row of due.results ?? []) {
+    const claim = await env.DB
+      .prepare(
+        `UPDATE outbound_messages SET status = 'sending' WHERE id = ?1 AND status = 'scheduled'`,
+      )
+      .bind(row.id)
+      .run();
+    if (!claim.meta.changes) continue;
+
+    try {
+      const body = JSON.parse(row.request_json) as SendEmailBody;
+      // Re-validate at send time: the domain may have been deleted or a
+      // recipient suppressed since the request was accepted.
+      const prep = await prepareSendContext(env, row.owner_id, body);
+      if (prep.kind === "error") {
+        await env.DB
+          .prepare(`UPDATE outbound_messages SET status = 'failed', last_error = ?2 WHERE id = ?1`)
+          .bind(row.id, prep.message)
+          .run();
+        continue;
+      }
+      const res = await executeSend(env, ctx, row.owner_id, body, {
+        outboundId: row.id,
+        idempotencyKey: null,
+        from: prep.from,
+        to: prep.to,
+        cc: prep.cc,
+        bcc: prep.bcc,
+        replyTo: prep.replyTo,
+        fromDomain: prep.fromDomain,
+        dom: prep.dom,
+        tracking: prep.tracking,
+      });
+      log.info("email.scheduled_send", { outbound_id: row.id, status: res.status });
+    } catch (err) {
+      await env.DB
+        .prepare(`UPDATE outbound_messages SET status = 'failed', last_error = ?2 WHERE id = ?1`)
+        .bind(row.id, String(err).slice(0, 500))
+        .run();
+    }
+  }
 }
 
 // Resend batch endpoint: array of email objects, ≤ 100, attachments + scheduled_at
@@ -490,16 +668,30 @@ export async function handleEmailBatch(
     }
   }
 
+  // Idempotency applies to the batch as a whole. The header must NOT leak
+  // into the per-item sends: they would all share one key, so item 1 would
+  // be sent and items 2..n would replay item 1's id without sending.
+  const idempotencyKey = req.headers.get("Idempotency-Key");
+  if (idempotencyKey) {
+    const cached = await env.KV.get(`idem:batch:${key.user_id}:${idempotencyKey}`, "text");
+    if (cached) {
+      return new Response(cached, { headers: { "content-type": "application/json" } });
+    }
+  }
+  const itemHeaders = new Headers(req.headers);
+  itemHeaders.delete("Idempotency-Key");
+
   const data: Array<{ id: string }> = [];
   for (const item of raw) {
     const stubReq = new Request(req.url, {
       method: "POST",
-      headers: req.headers,
+      headers: itemHeaders,
       body: JSON.stringify(item),
     });
     const res = await handleEmailSend(stubReq, env, key);
     if (res.status >= 400) {
-      // Stop batch on first error and return what succeeded.
+      // Stop batch on first error and return what succeeded. Don't record
+      // the idempotency key: a retry should re-attempt the whole batch.
       const errBody = await res.clone().json();
       return Response.json(
         { object: "list", data, error: errBody },
@@ -509,7 +701,13 @@ export async function handleEmailBatch(
     const json = (await res.json()) as { id: string };
     data.push({ id: json.id });
   }
-  return Response.json({ object: "list", data });
+  const responseBody = JSON.stringify({ object: "list", data });
+  if (idempotencyKey) {
+    await env.KV.put(`idem:batch:${key.user_id}:${idempotencyKey}`, responseBody, {
+      expirationTtl: 86400,
+    });
+  }
+  return new Response(responseBody, { headers: { "content-type": "application/json" } });
 }
 
 export async function cancelOutboundMessage(
@@ -518,6 +716,9 @@ export async function cancelOutboundMessage(
   id: string,
   ctx?: ExecutionContext,
 ): Promise<Response> {
+  if (!key.scopes.includes("emails.send")) {
+    return httpError.forbidden("API key lacks emails.send scope");
+  }
   const row = await env.DB
     .prepare(
       `SELECT id, status FROM outbound_messages WHERE id = ?1 AND owner_id = ?2`,
@@ -536,14 +737,15 @@ export async function cancelOutboundMessage(
     .prepare(`UPDATE outbound_messages SET status = 'canceled' WHERE id = ?1`)
     .bind(id)
     .run();
+  const cancelEventId = newId.event();
   await env.DB
     .prepare(
       `INSERT INTO events (id, owner_id, type, outbound_id, email_id, payload_json, created_at)
        VALUES (?1, ?2, 'email.canceled', ?3, ?3, ?4, ?5)`,
     )
-    .bind(newId.event(), key.user_id, id, JSON.stringify({}), Date.now())
+    .bind(cancelEventId, key.user_id, id, JSON.stringify({}), Date.now())
     .run();
-  const dispatch = fanoutEvent(env, key.user_id, "email.canceled", { email_id: id });
+  const dispatch = fanoutEvent(env, key.user_id, "email.canceled", { email_id: id }, cancelEventId);
   if (ctx) ctx.waitUntil(dispatch);
   else await dispatch;
   return Response.json({ object: "email", id: row.id, status: "canceled" });
@@ -556,6 +758,9 @@ export async function patchOutboundMessage(
   id: string,
   ctx?: ExecutionContext,
 ): Promise<Response> {
+  if (!key.scopes.includes("emails.send")) {
+    return httpError.forbidden("API key lacks emails.send scope");
+  }
   const row = await env.DB
     .prepare(
       `SELECT id, status, scheduled_at FROM outbound_messages WHERE id = ?1 AND owner_id = ?2`,
@@ -586,13 +791,14 @@ export async function patchOutboundMessage(
     )
     .bind(id, ts)
     .run();
+  const schedEventId = newId.event();
   await env.DB
     .prepare(
       `INSERT INTO events (id, owner_id, type, outbound_id, email_id, payload_json, created_at)
        VALUES (?1, ?2, 'email.scheduled', ?3, ?3, ?4, ?5)`,
     )
     .bind(
-      newId.event(),
+      schedEventId,
       key.user_id,
       id,
       JSON.stringify({ scheduled_at: new Date(ts).toISOString() }),
@@ -602,7 +808,7 @@ export async function patchOutboundMessage(
   const dispatch = fanoutEvent(env, key.user_id, "email.scheduled", {
     email_id: id,
     scheduled_at: new Date(ts).toISOString(),
-  });
+  }, schedEventId);
   if (ctx) ctx.waitUntil(dispatch);
   else await dispatch;
   return Response.json({
@@ -797,6 +1003,9 @@ export async function getOutboundMessage(
   key: ApiKeyAuth,
   id: string,
 ): Promise<Response> {
+  if (!key.scopes.includes("emails.read")) {
+    return httpError.forbidden("API key lacks emails.read scope");
+  }
   const row = await env.DB
     .prepare(
       `SELECT id, status, created_at, sent_at, scheduled_at, channel, last_error,

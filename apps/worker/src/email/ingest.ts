@@ -24,18 +24,18 @@ async function ensureAlias(
   domainId: string,
   ownerId: string,
   fullAddress: string,
-): Promise<string | null> {
+): Promise<{ id: string; disabled: boolean } | null> {
   const lower = fullAddress.toLowerCase();
   const at = lower.lastIndexOf("@");
   if (at <= 0) return null;
   const localPart = lower.slice(0, at);
   const existing = await env.DB
     .prepare(
-      `SELECT id FROM aliases WHERE domain_id = ?1 AND local_part = ?2 LIMIT 1`,
+      `SELECT id, disabled FROM aliases WHERE domain_id = ?1 AND local_part = ?2 LIMIT 1`,
     )
     .bind(domainId, localPart)
-    .first<{ id: string }>();
-  if (existing) return existing.id;
+    .first<{ id: string; disabled: number }>();
+  if (existing) return { id: existing.id, disabled: Boolean(existing.disabled) };
 
   const id = newId.alias();
   await env.DB
@@ -50,11 +50,11 @@ async function ensureAlias(
   // Re-query to get the actual id (could have lost a race).
   const row = await env.DB
     .prepare(
-      `SELECT id FROM aliases WHERE domain_id = ?1 AND local_part = ?2 LIMIT 1`,
+      `SELECT id, disabled FROM aliases WHERE domain_id = ?1 AND local_part = ?2 LIMIT 1`,
     )
     .bind(domainId, localPart)
-    .first<{ id: string }>();
-  return row?.id ?? null;
+    .first<{ id: string; disabled: number }>();
+  return row ? { id: row.id, disabled: Boolean(row.disabled) } : null;
 }
 
 async function resolveOwner(env: Env, toDomain: string): Promise<OwnerLookup | null> {
@@ -104,9 +104,15 @@ export async function handleInboundEmail(
     return;
   }
 
-  const aliasId = owner.domainId
+  const alias = owner.domainId
     ? await ensureAlias(env, owner.domainId, owner.ownerId, toAddr)
     : null;
+  if (alias?.disabled) {
+    message.setReject(`recipient ${toAddr} is disabled`);
+    log.info("email.rejected", { reason: "alias_disabled", to: toAddr, from: fromAddr });
+    return;
+  }
+  const aliasId = alias?.id ?? null;
 
   const r2Key = `raw/${yyyymm(now)}/${messageId}.eml`;
   // Buffer the ReadableStream first. CF Email Routing caps a single email at
@@ -115,9 +121,9 @@ export async function handleInboundEmail(
   // uploads have been observed to throw when the producer doesn't expose a
   // size hint).
   const rawBuf = await new Response(message.raw).arrayBuffer();
-  // Keep a string copy for DSN regex scanning later. ~25MiB worst case but
-  // typical bounces are < 50KiB.
-  const rawText = new TextDecoder("utf-8", { fatal: false }).decode(
+  // Keep a string copy (first 256 KiB) for DSN regex scanning later; the
+  // machine-readable delivery-status fields sit near the top of a DSN.
+  const rawText = new TextDecoder("utf-8", { fatal: false, ignoreBOM: false }).decode(
     rawBuf.slice(0, Math.min(rawBuf.byteLength, 256 * 1024)),
   );
   await env.R2.put(r2Key, rawBuf, {
@@ -161,75 +167,86 @@ export async function handleInboundEmail(
     owner_source: owner.source,
   });
 
-  // Synchronous parse + thread for now. The pipeline is structured so it can
-  // move to a Queue consumer later without changing the call signatures.
-  await parseAndEnrichMessage(env, messageId);
-  await assignThread(env, messageId);
+  // Post-storage processing runs inside a catch-all: the email is already
+  // durably stored (R2 object + D1 row), so a parse/thread/bounce failure
+  // must not fail the email() handler — that would make the sending MTA
+  // retry the whole message and pile up duplicate raw_only rows. The stuck
+  // row stays at parse_status='raw_only' for later repair instead.
+  try {
+    // Synchronous parse + thread for now. The pipeline is structured so it can
+    // move to a Queue consumer later without changing the call signatures.
+    await parseAndEnrichMessage(env, messageId);
+    await assignThread(env, messageId);
 
-  // Bounce / complaint detection. If this inbound is a DSN or ARF report that
-  // correlates back to one of our outbound sends, we mutate the outbound's
-  // status + write an `email.bounced` / `email.complained` / `email.delivery_delayed`
-  // event + add the recipient to suppressions when hard. Suppress the generic
-  // `email.received` fanout in that case — the bounce-specific event covers it.
-  const bounce = await tryProcessBounce(env, rawText, _ctx);
+    // Bounce / complaint detection. If this inbound is a DSN or ARF report that
+    // correlates back to one of our outbound sends, we mutate the outbound's
+    // status + write an `email.bounced` / `email.complained` / `email.delivery_delayed`
+    // event + add the recipient to suppressions when hard. Suppress the generic
+    // `email.received` fanout in that case — the bounce-specific event covers it.
+    const bounce = await tryProcessBounce(env, rawText, _ctx);
 
-  if (!bounce) {
-    const parsed = await env.DB
-      .prepare(`SELECT subject, parse_status FROM messages WHERE id = ?1`)
-      .bind(messageId)
-      .first<{ subject: string | null; parse_status: string }>();
-    if (parsed?.parse_status === "parsed") {
-      await env.DB
-        .prepare(
-          `INSERT INTO events (id, owner_id, type, email_id, payload_json, created_at)
-           VALUES (?1, ?2, 'email.received', ?3, ?4, ?5)`,
-        )
-        .bind(
-          newId.event(),
-          owner.ownerId,
-          messageId,
-          JSON.stringify({
+    if (!bounce) {
+      const parsed = await env.DB
+        .prepare(`SELECT subject, parse_status FROM messages WHERE id = ?1`)
+        .bind(messageId)
+        .first<{ subject: string | null; parse_status: string }>();
+      if (parsed?.parse_status === "parsed") {
+        const eventId = newId.event();
+        await env.DB
+          .prepare(
+            `INSERT INTO events (id, owner_id, type, email_id, payload_json, created_at)
+             VALUES (?1, ?2, 'email.received', ?3, ?4, ?5)`,
+          )
+          .bind(
+            eventId,
+            owner.ownerId,
+            messageId,
+            JSON.stringify({
+              from: fromAddr,
+              to: toAddr,
+              subject: parsed.subject,
+            }),
+            Date.now(),
+          )
+          .run();
+        _ctx.waitUntil(
+          fanoutEvent(env, owner.ownerId, "email.received", {
+            message_id: messageId,
             from: fromAddr,
             to: toAddr,
             subject: parsed.subject,
-          }),
-          Date.now(),
-        )
-        .run();
-      _ctx.waitUntil(
-        fanoutEvent(env, owner.ownerId, "email.received", {
-          message_id: messageId,
-          from: fromAddr,
-          to: toAddr,
-          subject: parsed.subject,
-        }),
-      );
+          }, eventId),
+        );
+      }
     }
-  }
 
-  // Bump alias counters once we know the message ended up parsed (not a
-  // duplicate, not parse-failed).
-  if (aliasId) {
-    const post = await env.DB
-      .prepare(`SELECT parse_status FROM messages WHERE id = ?1`)
-      .bind(messageId)
-      .first<{ parse_status: string }>();
-    if (post?.parse_status === "parsed") {
-      await env.DB
-        .prepare(
-          `UPDATE aliases SET
-             message_count   = message_count + 1,
-             unread_count    = unread_count + 1,
-             last_message_at = MAX(COALESCE(last_message_at, 0), ?2)
-           WHERE id = ?1`,
-        )
-        .bind(aliasId, now)
-        .run();
+    // Bump alias counters once we know the message ended up parsed (not a
+    // duplicate, not parse-failed). DSN/ARF reports are skipped — a bounce
+    // flood shouldn't inflate unread badges.
+    if (aliasId && !bounce) {
+      const post = await env.DB
+        .prepare(`SELECT parse_status FROM messages WHERE id = ?1`)
+        .bind(messageId)
+        .first<{ parse_status: string }>();
+      if (post?.parse_status === "parsed") {
+        await env.DB
+          .prepare(
+            `UPDATE aliases SET
+               message_count   = message_count + 1,
+               unread_count    = unread_count + 1,
+               last_message_at = MAX(COALESCE(last_message_at, 0), ?2)
+             WHERE id = ?1`,
+          )
+          .bind(aliasId, now)
+          .run();
+      }
     }
+  } catch (err) {
+    log.warn("email.postprocess_failed", {
+      msg_id: messageId,
+      from: fromAddr,
+      to: toAddr,
+      error: String(err),
+    });
   }
-
-  // Beacon for SSE clients.
-  await env.KV.put(`inbox:lastUpdate:${owner.ownerId}`, String(Date.now()), {
-    expirationTtl: 86400,
-  });
 }

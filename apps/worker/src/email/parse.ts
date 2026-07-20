@@ -37,14 +37,13 @@ function lowerAddrs(arr: ParsedAddress[] | undefined): string[] {
     .filter((s): s is string => Boolean(s));
 }
 
-function refsToArrayJson(refs: string | string[] | undefined): string | null {
+export function refsToArrayJson(refs: string | string[] | undefined): string | null {
   if (!refs) return null;
-  const list = Array.isArray(refs)
-    ? refs
-    : refs
-        .split(/\s+/)
-        .map((s) => s.trim())
-        .filter(Boolean);
+  // Store bare message-ids (no angle brackets) — rfc822_message_id is stored
+  // bare too, and thread lookup compares the two with `=`.
+  const list = (Array.isArray(refs) ? refs : refs.split(/\s+/))
+    .map((s) => s.trim().replace(/^<|>$/g, ""))
+    .filter(Boolean);
   return list.length ? JSON.stringify(list) : null;
 }
 
@@ -88,9 +87,9 @@ async function markFailed(env: Env, messageId: string, error: string): Promise<v
  */
 export async function parseAndEnrichMessage(env: Env, messageId: string): Promise<void> {
   const row = await env.DB
-    .prepare("SELECT r2_key, parse_status FROM messages WHERE id = ?1")
+    .prepare("SELECT r2_key, parse_status, owner_id FROM messages WHERE id = ?1")
     .bind(messageId)
-    .first<{ r2_key: string | null; parse_status: string }>();
+    .first<{ r2_key: string | null; parse_status: string; owner_id: string }>();
   if (!row || !row.r2_key) {
     return;
   }
@@ -131,12 +130,16 @@ export async function parseAndEnrichMessage(env: Env, messageId: string): Promis
 
   const attachments = parsed.attachments ?? [];
 
-  // Dedup on rfc822_message_id: if another row already has this id, mark this
-  // ingest as duplicate (keep the row for audit; r2 raw is fine to garbage-collect later).
+  // Dedup on rfc822_message_id *within this owner*: the same RFC822 message
+  // legitimately arrives once per recipient tenant (one To: a@owner1.com,
+  // b@owner2.com delivery fans out to two owners) — only same-owner copies
+  // are duplicates. Keep the row for audit; r2 raw is fine to garbage-collect later.
   if (msgId) {
     const dup = await env.DB
-      .prepare("SELECT id FROM messages WHERE rfc822_message_id = ?1 AND id != ?2 LIMIT 1")
-      .bind(msgId, messageId)
+      .prepare(
+        "SELECT id FROM messages WHERE owner_id = ?3 AND rfc822_message_id = ?1 AND id != ?2 LIMIT 1",
+      )
+      .bind(msgId, messageId, row.owner_id)
       .first<{ id: string }>();
     if (dup) {
       await env.DB
@@ -147,9 +150,10 @@ export async function parseAndEnrichMessage(env: Env, messageId: string): Promis
     }
   }
 
-  await env.DB
-    .prepare(
-      `UPDATE messages SET
+  try {
+    await env.DB
+      .prepare(
+        `UPDATE messages SET
          rfc822_message_id = ?2,
          in_reply_to       = ?3,
          references_json   = ?4,
@@ -162,27 +166,40 @@ export async function parseAndEnrichMessage(env: Env, messageId: string): Promis
          subject           = ?11,
          snippet           = ?12,
          has_attachments   = ?13,
-         attachment_count  = ?14,
-         parse_status      = 'parsed'
+         attachment_count  = ?14
        WHERE id = ?1`,
-    )
-    .bind(
-      messageId,
-      msgId,
-      inReplyTo,
-      refsJson,
-      fromAddr,
-      fromName,
-      JSON.stringify(toList),
-      ccList.length ? JSON.stringify(ccList) : null,
-      bccList.length ? JSON.stringify(bccList) : null,
-      replyTo,
-      subject,
-      snippet,
-      attachments.length ? 1 : 0,
-      attachments.length,
-    )
-    .run();
+      )
+      .bind(
+        messageId,
+        msgId,
+        inReplyTo,
+        refsJson,
+        fromAddr,
+        fromName,
+        JSON.stringify(toList),
+        ccList.length ? JSON.stringify(ccList) : null,
+        bccList.length ? JSON.stringify(bccList) : null,
+        replyTo,
+        subject,
+        snippet,
+        attachments.length ? 1 : 0,
+        attachments.length,
+      )
+      .run();
+  } catch (err) {
+    // Concurrent ingest of the same Message-ID for the same owner: the loser
+    // of the UNIQUE(owner_id, rfc822_message_id) race is a duplicate, not a
+    // pipeline failure (an uncaught throw here would make the sending MTA
+    // retry the whole email).
+    if (/UNIQUE constraint failed/i.test(String(err))) {
+      await env.DB
+        .prepare(`UPDATE messages SET parse_status = 'duplicate', parse_error = ?2 WHERE id = ?1`)
+        .bind(messageId, `duplicate (lost dedup race): ${msgId}`)
+        .run();
+      return;
+    }
+    throw err;
+  }
 
   for (const att of attachments) {
     const bytes = toUint8(att.content);
@@ -200,7 +217,7 @@ export async function parseAndEnrichMessage(env: Env, messageId: string): Promis
     }
     await env.DB
       .prepare(
-        `INSERT INTO attachments (id, message_id, filename, content_type, size_bytes, content_id, is_inline, r2_key, sha256)
+        `INSERT OR IGNORE INTO attachments (id, message_id, filename, content_type, size_bytes, content_id, is_inline, r2_key, sha256)
          VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)`,
       )
       .bind(
@@ -216,6 +233,15 @@ export async function parseAndEnrichMessage(env: Env, messageId: string): Promis
       )
       .run();
   }
+
+  // Flip to 'parsed' only after attachment rows exist: a crash mid-loop
+  // leaves the row re-processable (the attachment INSERTs are idempotent via
+  // UNIQUE(message_id, sha256) + OR IGNORE) instead of permanently recording
+  // attachment_count > 0 with missing rows.
+  await env.DB
+    .prepare(`UPDATE messages SET parse_status = 'parsed' WHERE id = ?1`)
+    .bind(messageId)
+    .run();
 
   log.info("email.parsed", {
     msg_id: messageId,
