@@ -14,6 +14,10 @@ export interface ComposePrefill {
   bodyMode?: "text" | "html";
   inReplyTo?: string | null;
   references?: string[];
+  // Internal id of the message a reply/forward originates from. Used to
+  // scope autosaved drafts (forwards have no In-Reply-To, and inbound
+  // messages may lack an rfc822 Message-ID).
+  sourceMessageId?: string;
   // For test mode, the domain we're verifying.
   testDomain?: string;
 }

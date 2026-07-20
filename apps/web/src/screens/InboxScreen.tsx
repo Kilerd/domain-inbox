@@ -1,6 +1,6 @@
 import { Pencil } from "lucide-react";
 import { useEffect, useState } from "react";
-import type { Thread } from "@/api";
+import type { InboxView, Thread, ThreadFlagsPatch } from "@/api";
 import { Navigator } from "@/components/Navigator";
 import { SearchBar } from "@/components/SearchBar";
 import { ThreadDetail } from "@/components/ThreadDetail";
@@ -31,6 +31,31 @@ function ComposeButton() {
   );
 }
 
+// Does applying `patch` to a thread remove it from `view`? Mirrors the
+// worker's viewClause() semantics (apps/worker/src/api/inbox.ts): inbox
+// excludes archived/trash/spam; unread excludes trash/spam; the flag views
+// each check only their own flag. Deliberately ignores `read` so implicitly
+// marking an open thread read in the "unread" view doesn't close it.
+function patchHidesThreadInView(view: InboxView, patch: ThreadFlagsPatch): boolean {
+  switch (view) {
+    case "inbox":
+      return patch.trash === true || patch.spam === true || patch.archive === true;
+    case "unread":
+      return patch.trash === true || patch.spam === true;
+    case "starred":
+      return patch.star === false;
+    case "archived":
+      return patch.archive === false;
+    case "trash":
+      return patch.trash === false;
+    case "spam":
+      return patch.spam === false;
+    case "sent":
+    case "all":
+      return false;
+  }
+}
+
 function Layout() {
   const [selected, setSelected] = useState<Thread | null>(null);
   const { state } = useInboxView();
@@ -52,12 +77,33 @@ function Layout() {
           <SearchBar />
         </div>
         <div className="flex-1 overflow-hidden">
-          <ThreadList selectedThreadId={selected?.id ?? null} onSelect={setSelected} />
+          <ThreadList
+            selectedThreadId={selected?.id ?? null}
+            onSelect={setSelected}
+            onBulkFlags={(ids, patch) => {
+              // A bulk action that included the open thread and removed it
+              // from this view — don't keep the dead thread rendered.
+              if (
+                selected &&
+                ids.includes(selected.id) &&
+                patchHidesThreadInView(state.view, patch)
+              ) {
+                setSelected(null);
+              }
+            }}
+          />
         </div>
       </div>
       <main className="flex-1 overflow-hidden">
         {selected ? (
-          <ThreadDetail threadId={selected.id} />
+          <ThreadDetail
+            threadId={selected.id}
+            onFlagsChanged={(patch) => {
+              // Trashed/archived/… out of the current view from the detail
+              // header — clear the selection instead of showing a dead thread.
+              if (patchHidesThreadInView(state.view, patch)) setSelected(null);
+            }}
+          />
         ) : (
           <div className="flex h-full items-center justify-center text-sm text-zinc-500">
             Select a thread to view messages.

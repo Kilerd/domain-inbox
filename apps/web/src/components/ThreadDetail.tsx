@@ -13,7 +13,13 @@ import {
   Trash2,
 } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
-import { api, type ActivityEvent, type Message, type ThreadDetail as TThreadDetail } from "@/api";
+import {
+  api,
+  type ActivityEvent,
+  type Message,
+  type ThreadDetail as TThreadDetail,
+  type ThreadFlagsPatch,
+} from "@/api";
 import { Badge, Button } from "@/components/ui";
 import { FLAG_ARCHIVED, FLAG_SPAM, FLAG_STARRED, FLAG_TRASH, has } from "@/lib/flags";
 import { useCompose, type ComposePrefill } from "@/lib/compose-store";
@@ -27,6 +33,23 @@ function normalizeSubjectPrefix(subject: string, prefix: "Re:" | "Fwd:"): string
     cur = cur.replace(/^(re|fwd?|fw):\s*/i, "");
   }
   return `${prefix} ${cur}`.trim();
+}
+
+/**
+ * Plain-text projection of a sanitized email HTML body. DOMParser neither
+ * executes scripts nor loads subresources, so this is safe even before the
+ * worker-side sanitization is considered.
+ */
+function htmlToText(html: string): string {
+  const doc = new DOMParser().parseFromString(html, "text/html");
+  return (doc.body.textContent ?? "").replace(/\n{3,}/g, "\n\n").trim();
+}
+
+function quoteLines(text: string): string {
+  return text
+    .split("\n")
+    .map((line) => `> ${line}`)
+    .join("\n");
 }
 
 function dedupeAddrs(arr: string[], ownEmails: Set<string>): string[] {
@@ -45,18 +68,25 @@ function dedupeAddrs(arr: string[], ownEmails: Set<string>): string[] {
 
 interface Props {
   threadId: string;
+  /** Called after a header flags change (star/archive/spam/trash) succeeds,
+   *  so the parent can react — e.g. deselect a thread that just left the
+   *  current view. */
+  onFlagsChanged?: (patch: ThreadFlagsPatch) => void;
 }
 
-export function ThreadDetail({ threadId }: Props) {
+export function ThreadDetail({ threadId, onFlagsChanged }: Props) {
   const qc = useQueryClient();
   const q = useQuery({
     queryKey: ["thread", threadId],
     queryFn: () => api.getThread(threadId),
   });
   const flagsMut = useMutation({
-    mutationFn: (patch: Parameters<typeof api.setThreadFlags>[1]) =>
-      api.setThreadFlags(threadId, patch),
-    onSuccess: () => qc.invalidateQueries({ queryKey: ["inbox"] }),
+    mutationFn: (patch: ThreadFlagsPatch) => api.setThreadFlags(threadId, patch),
+    onSuccess: (_data, patch) => {
+      qc.invalidateQueries({ queryKey: ["inbox"] });
+      qc.invalidateQueries({ queryKey: ["thread", threadId] });
+      onFlagsChanged?.(patch);
+    },
   });
 
   if (q.isLoading)
@@ -141,8 +171,9 @@ function useReplyHandlers(
   forward: () => void;
 } {
   const { openCompose } = useCompose();
+  const qc = useQueryClient();
   const meQ = useQuery({ queryKey: ["me"], queryFn: api.me });
-  const domainsQ = useQuery({ queryKey: ["v1", "domains"], queryFn: api.listDomains });
+  const domainsQ = useQuery({ queryKey: ["domains"], queryFn: api.listDomains });
   const suggestionsQ = useQuery({
     queryKey: ["compose", "from-suggestions"],
     queryFn: api.fromSuggestions,
@@ -194,7 +225,28 @@ function useReplyHandlers(
     return first ? `hello@${first}` : "";
   }
 
-  function buildPrefill(mode: ComposePrefill["mode"]): ComposePrefill {
+  /**
+   * Plain-text version of the original message body, for quoting into a
+   * reply/forward. Shares the ["body", id] cache entry with MessageCard, so
+   * in the common case (message is open) this resolves synchronously from
+   * cache. Attachments are NOT carried over.
+   */
+  async function fetchOriginalText(): Promise<string> {
+    try {
+      const body = await qc.fetchQuery({
+        queryKey: ["body", message.id],
+        queryFn: () => api.getBody(message.id),
+        staleTime: 60_000,
+      });
+      if (body.text) return body.text.trim();
+      if (body.html) return htmlToText(body.html);
+    } catch {
+      // Body unavailable — fall back to the bare header stub.
+    }
+    return "";
+  }
+
+  function buildPrefill(mode: ComposePrefill["mode"], originalText: string): ComposePrefill {
     const myEmail = meQ.data?.email?.toLowerCase() ?? "";
     const fromAddr = pickOwnFromAddress();
     const ownEmails = new Set<string>([myEmail, fromAddr].filter(Boolean));
@@ -213,16 +265,21 @@ function useReplyHandlers(
       (message.subject ?? "(no subject)") +
       "\n";
 
+    const quotedOriginal = originalText
+      ? `${quoteHeader}${quoteLines(originalText)}\n`
+      : quoteHeader;
+
     if (mode === "reply") {
       return {
         mode: "reply",
         from: fromAddr,
         to: replyTarget ? [replyTarget.toLowerCase()] : [],
         subject: normalizeSubjectPrefix(baseSubject, "Re:"),
-        text: quoteHeader,
+        text: quotedOriginal,
         bodyMode: "text",
         inReplyTo: message.rfc822_message_id ?? null,
         references: message.rfc822_message_id ? [message.rfc822_message_id] : [],
+        sourceMessageId: message.id,
       };
     }
     if (mode === "reply-all") {
@@ -242,10 +299,11 @@ function useReplyHandlers(
         to,
         cc: cc.length ? cc : undefined,
         subject: normalizeSubjectPrefix(baseSubject, "Re:"),
-        text: quoteHeader,
+        text: quotedOriginal,
         bodyMode: "text",
         inReplyTo: message.rfc822_message_id ?? null,
         references: message.rfc822_message_id ? [message.rfc822_message_id] : [],
+        sourceMessageId: message.id,
       };
     }
     if (mode === "forward") {
@@ -265,17 +323,26 @@ function useReplyHandlers(
           (message.subject ?? "(no subject)") +
           "\nTo: " +
           message.to.join(", ") +
-          "\n",
+          "\n" +
+          (originalText ? `\n${originalText}\n` : ""),
         bodyMode: "text",
+        // Scopes the autosaved draft to this exact source message so
+        // different forwards don't bleed into each other.
+        sourceMessageId: message.id,
       };
     }
     return { mode: "new" };
   }
 
+  async function openWith(mode: ComposePrefill["mode"]): Promise<void> {
+    const originalText = await fetchOriginalText();
+    openCompose(buildPrefill(mode, originalText));
+  }
+
   return {
-    reply: () => openCompose(buildPrefill("reply")),
-    replyAll: () => openCompose(buildPrefill("reply-all")),
-    forward: () => openCompose(buildPrefill("forward")),
+    reply: () => void openWith("reply"),
+    replyAll: () => void openWith("reply-all"),
+    forward: () => void openWith("forward"),
   };
 }
 
@@ -293,7 +360,10 @@ function useReplyHandlers(
 function HtmlBody({ html }: { html: string }) {
   const hostRef = useRef<HTMLDivElement | null>(null);
   const [showQuote, setShowQuote] = useState(false);
-  const hasQuote = /gmail_quote(_container)?\b|<blockquote/i.test(html);
+  // Only offer the toggle when the content actually carries one of the
+  // classes the <style> below hides (gmail_quote / gmail_quote_container);
+  // a bare <blockquote> is never hidden, so the button would be a no-op.
+  const hasQuote = /class=["'][^"']*gmail_quote/i.test(html);
 
   useEffect(() => {
     const host = hostRef.current;
@@ -301,9 +371,6 @@ function HtmlBody({ html }: { html: string }) {
     const shadow =
       host.shadowRoot ?? host.attachShadow({ mode: "open" });
 
-    // Force every link to open in a new tab (mirrors what <base target> did
-    // in the old iframe path).
-    const linkTargetScript = "";
     shadow.innerHTML = `
       <style>
         :host { display: block; color-scheme: light dark; }
@@ -326,7 +393,6 @@ function HtmlBody({ html }: { html: string }) {
         }
       </style>
       <div class="root">${html}</div>
-      ${linkTargetScript}
     `;
     // sanitize already added target="_blank" rel=… to every <a>, but Shadow
     // DOM doesn't honor <base target>, so links open in current tab unless
@@ -378,7 +444,9 @@ function MessageCard({
     mutationFn: () => api.markRead(message.id),
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ["thread", threadId] });
-      qc.invalidateQueries({ queryKey: ["threads"] });
+      // The thread list + sidebar unread counters all live under ["inbox", …]
+      // (["inbox","threads",…], ["inbox","domains"], ["inbox","aliases",…]).
+      qc.invalidateQueries({ queryKey: ["inbox"] });
     },
   });
 

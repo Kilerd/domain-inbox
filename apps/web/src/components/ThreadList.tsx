@@ -1,19 +1,25 @@
-import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { useInfiniteQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { formatDistanceToNow } from "date-fns";
 import { Archive, Inbox, Mail, Star, Trash2 } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
-import { api, type Thread } from "@/api";
+import { api, type Thread, type ThreadFlagsPatch } from "@/api";
 import { Button } from "@/components/ui";
 import { FLAG_STARRED, has } from "@/lib/flags";
 import { useInboxView } from "@/lib/inbox-view";
 import { cn } from "@/lib/utils";
 
+const SSE_RETRY_BASE_MS = 5_000;
+const SSE_RETRY_MAX_MS = 60_000;
+
 interface Props {
   selectedThreadId: string | null;
   onSelect: (t: Thread) => void;
+  /** Called after a bulk flags change succeeds, so the parent can drop the
+   *  open-thread selection when the patch removes it from the current view. */
+  onBulkFlags: (ids: string[], patch: ThreadFlagsPatch) => void;
 }
 
-export function ThreadList({ selectedThreadId, onSelect }: Props) {
+export function ThreadList({ selectedThreadId, onSelect, onBulkFlags }: Props) {
   const { state } = useInboxView();
   const qc = useQueryClient();
   const queryKey = useMemo(
@@ -27,27 +33,63 @@ export function ThreadList({ selectedThreadId, onSelect }: Props) {
     ],
     [state.view, state.domainId, state.aliasId, state.query],
   );
-  const q = useQuery({
+  const q = useInfiniteQuery({
     queryKey,
-    queryFn: () =>
+    queryFn: ({ pageParam }) =>
       api.listThreads({
         view: state.view,
         domain: state.domainId,
         alias: state.aliasId,
         q: state.query || null,
+        cursor: pageParam,
         limit: 100,
       }),
+    initialPageParam: null as string | null,
+    getNextPageParam: (last) => last.next_cursor,
     refetchInterval: 30_000,
   });
+  const threads = useMemo(
+    () => q.data?.pages.flatMap((p) => p.threads) ?? [],
+    [q.data],
+  );
 
-  // Live updates via SSE
+  // Live updates via SSE. EventSource auto-reconnects on transient drops, but
+  // goes permanently CLOSED on a non-2xx response — recreate it ourselves with
+  // exponential backoff (5s doubling to 60s), reset once a connection opens.
   useEffect(() => {
-    const es = new EventSource("/api/inbox/stream");
-    es.addEventListener("new-message", () => {
-      qc.invalidateQueries({ queryKey: ["inbox"] });
-    });
-    es.onerror = () => {};
-    return () => es.close();
+    let es: EventSource | null = null;
+    let retryTimer: ReturnType<typeof setTimeout> | null = null;
+    let retryDelay = SSE_RETRY_BASE_MS;
+    let disposed = false;
+
+    function connect() {
+      if (disposed) return;
+      es = new EventSource("/api/inbox/stream");
+      es.addEventListener("new-message", () => {
+        qc.invalidateQueries({ queryKey: ["inbox"] });
+      });
+      es.onopen = () => {
+        retryDelay = SSE_RETRY_BASE_MS;
+      };
+      es.onerror = () => {
+        // readyState CONNECTING means the browser is retrying on its own.
+        if (!es || es.readyState !== EventSource.CLOSED) return;
+        es.close();
+        es = null;
+        retryTimer = setTimeout(() => {
+          retryTimer = null;
+          connect();
+        }, retryDelay);
+        retryDelay = Math.min(retryDelay * 2, SSE_RETRY_MAX_MS);
+      };
+    }
+
+    connect();
+    return () => {
+      disposed = true;
+      if (retryTimer) clearTimeout(retryTimer);
+      es?.close();
+    };
   }, [qc]);
 
   // Multi-select set
@@ -70,19 +112,20 @@ export function ThreadList({ selectedThreadId, onSelect }: Props) {
     <div className="flex h-full flex-col">
       <Toolbar
         viewLabel={describeView(state)}
-        count={q.data?.threads.length ?? 0}
+        count={threads.length}
         selectedIds={[...selected]}
         onComplete={() => setSelected(new Set())}
+        onApplied={onBulkFlags}
       />
       <div className="flex-1 overflow-y-auto overflow-x-hidden">
         {q.isLoading && <div className="p-4 text-sm text-zinc-500">loading…</div>}
         {q.error && <div className="p-4 text-sm text-red-600">{String(q.error)}</div>}
-        {q.data && q.data.threads.length === 0 && (
+        {q.data && threads.length === 0 && (
           <div className="p-6 text-center text-sm text-zinc-500">
             No threads in this view.
           </div>
         )}
-        {q.data?.threads.map((t) => (
+        {threads.map((t) => (
           <ThreadRow
             key={t.id}
             thread={t}
@@ -92,6 +135,17 @@ export function ThreadList({ selectedThreadId, onSelect }: Props) {
             onSelect={() => onSelect(t)}
           />
         ))}
+        {q.hasNextPage && (
+          <div className="p-3 text-center">
+            <Button
+              variant="ghost"
+              onClick={() => q.fetchNextPage()}
+              disabled={q.isFetchingNextPage}
+            >
+              {q.isFetchingNextPage ? "Loading…" : "Load more"}
+            </Button>
+          </div>
+        )}
       </div>
     </div>
   );
@@ -125,18 +179,24 @@ function Toolbar({
   count,
   selectedIds,
   onComplete,
+  onApplied,
 }: {
   viewLabel: string;
   count: number;
   selectedIds: string[];
   onComplete: () => void;
+  onApplied: (ids: string[], patch: ThreadFlagsPatch) => void;
 }) {
   const qc = useQueryClient();
   const mut = useMutation({
-    mutationFn: (patch: Parameters<typeof api.batchSetThreadFlags>[1]) =>
+    mutationFn: (patch: ThreadFlagsPatch) =>
       api.batchSetThreadFlags(selectedIds, patch),
-    onSuccess: () => {
+    onSuccess: (_data, patch) => {
       qc.invalidateQueries({ queryKey: ["inbox"] });
+      // Any of the affected threads may be open in the detail pane; their
+      // detail queries live under ["thread", <id>].
+      qc.invalidateQueries({ queryKey: ["thread"] });
+      onApplied(selectedIds, patch);
       onComplete();
     },
   });

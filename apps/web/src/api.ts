@@ -384,8 +384,14 @@ export const api = {
       method: "POST",
       body: JSON.stringify({ email }),
     }),
-  logout: () =>
-    fetch("/api/auth/logout", { method: "POST", credentials: "same-origin" }),
+  logout: async () => {
+    const res = await fetch("/api/auth/logout", {
+      method: "POST",
+      credentials: "same-origin",
+    });
+    if (!res.ok) throw new Error(`logout failed: ${res.status}`);
+    return res;
+  },
 
   // Members
   listMembers: () => fetchJson<MembersList>("/api/v1/members"),

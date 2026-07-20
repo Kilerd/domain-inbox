@@ -12,22 +12,46 @@ interface Props {
   autoFocus?: boolean;
 }
 
+// Accepts a bare address or an RFC-style `Name <addr@host>` form and returns
+// the lowercased address, or null when nothing parseable is found.
+function extractEmail(raw: string): string | null {
+  const trimmed = raw.trim();
+  if (!trimmed) return null;
+  const angle = trimmed.match(/<([^<>]+)>/);
+  const candidate = (angle ? angle[1]! : trimmed).trim().toLowerCase();
+  return EMAIL_RE.test(candidate) ? candidate : null;
+}
+
 export function AddressChips({ label, values, onChange, placeholder, autoFocus }: Props) {
   const [draft, setDraft] = useState("");
+  const [invalidParts, setInvalidParts] = useState<string[]>([]);
 
   function commit(raw: string) {
-    const cleaned = raw.trim().replace(/^,|,$/, "").trim().toLowerCase();
+    const cleaned = raw.trim().replace(/^,|,$/, "").trim();
     if (!cleaned) return;
-    // Allow splitting on comma + commit each piece.
-    const parts = cleaned.split(/[,\s]+/).map((p) => p.trim()).filter(Boolean);
+    // Split on commas/semicolons only — spaces are significant inside
+    // `Name <a@b.com>` forms. Pieces without angle brackets may still hold
+    // several whitespace-separated bare addresses.
+    const pieces = cleaned
+      .split(/[,;]+/)
+      .flatMap((p) => (p.includes("<") ? [p] : p.split(/\s+/)))
+      .map((p) => p.trim())
+      .filter(Boolean);
     const next = [...values];
-    for (const p of parts) {
-      if (!EMAIL_RE.test(p)) continue;
-      if (next.includes(p)) continue;
-      next.push(p);
+    const bad: string[] = [];
+    for (const piece of pieces) {
+      const email = extractEmail(piece);
+      if (!email) {
+        bad.push(piece);
+        continue;
+      }
+      if (!next.includes(email)) next.push(email);
     }
     onChange(next);
-    setDraft("");
+    // Keep anything unparseable in the input, visibly flagged, instead of
+    // silently dropping it.
+    setDraft(bad.join(", "));
+    setInvalidParts(bad);
   }
 
   function onKey(e: KeyboardEvent<HTMLInputElement>) {
@@ -53,9 +77,11 @@ export function AddressChips({ label, values, onChange, placeholder, autoFocus }
       </span>
       <div
         className={cn(
-          "mt-1 flex min-h-[34px] flex-wrap items-center gap-1 rounded-md border border-zinc-200 bg-white px-2 py-1.5",
-          "focus-within:border-blue-500 focus-within:ring-1 focus-within:ring-blue-500",
-          "dark:border-zinc-700 dark:bg-zinc-900",
+          "mt-1 flex min-h-[34px] flex-wrap items-center gap-1 rounded-md border bg-white px-2 py-1.5",
+          "dark:bg-zinc-900",
+          invalidParts.length > 0
+            ? "border-red-400 focus-within:border-red-500 focus-within:ring-1 focus-within:ring-red-500 dark:border-red-900"
+            : "border-zinc-200 focus-within:border-blue-500 focus-within:ring-1 focus-within:ring-blue-500 dark:border-zinc-700",
         )}
       >
         {values.map((v, i) => (
@@ -75,15 +101,27 @@ export function AddressChips({ label, values, onChange, placeholder, autoFocus }
         ))}
         <input
           autoFocus={autoFocus}
-          type="email"
+          type="text"
           value={draft}
-          onChange={(e) => setDraft(e.target.value)}
+          onChange={(e) => {
+            setDraft(e.target.value);
+            if (invalidParts.length) setInvalidParts([]);
+          }}
           onKeyDown={onKey}
           onBlur={() => draft && commit(draft)}
           placeholder={values.length === 0 ? placeholder : ""}
-          className="min-w-[120px] flex-1 bg-transparent text-sm placeholder:text-zinc-400 focus:outline-none"
+          className={cn(
+            "min-w-[120px] flex-1 bg-transparent text-sm placeholder:text-zinc-400 focus:outline-none",
+            invalidParts.length > 0 && "text-red-600 dark:text-red-400",
+          )}
         />
       </div>
+      {invalidParts.length > 0 && (
+        <p className="mt-1 text-xs text-red-600 dark:text-red-400">
+          Not a valid address: {invalidParts.join(", ")} — fix it or clear the
+          input.
+        </p>
+      )}
     </label>
   );
 }

@@ -1,4 +1,4 @@
-import { useQuery } from "@tanstack/react-query";
+import { useInfiniteQuery, useQuery } from "@tanstack/react-query";
 import { Link, useNavigate, useParams, useSearch } from "@tanstack/react-router";
 import { format, formatDistanceToNow, subDays } from "date-fns";
 import {
@@ -17,7 +17,7 @@ import {
   Search,
   ShieldOff,
 } from "lucide-react";
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import {
   api,
   type ActivityEvent,
@@ -139,6 +139,47 @@ function pct(rate: number): string {
   return `${(rate * 100).toFixed(rate === 1 || rate === 0 ? 0 : 1)}%`;
 }
 
+/**
+ * Trailing-debounced value — same idea as components/SearchBar.tsx, so we
+ * don't fire one HTTP request per keystroke from the filter inputs.
+ */
+function useDebounced<T>(value: T, ms: number): T {
+  const [debounced, setDebounced] = useState(value);
+  useEffect(() => {
+    const handle = setTimeout(() => setDebounced(value), ms);
+    return () => clearTimeout(handle);
+  }, [value, ms]);
+  return debounced;
+}
+
+function LoadMoreRow({
+  colSpan,
+  hasNextPage,
+  isFetchingNextPage,
+  onLoadMore,
+}: {
+  colSpan: number;
+  hasNextPage: boolean;
+  isFetchingNextPage: boolean;
+  onLoadMore: () => void;
+}) {
+  if (!hasNextPage) return null;
+  return (
+    <tr>
+      <td colSpan={colSpan} className="px-3 py-2 text-center">
+        <button
+          type="button"
+          onClick={onLoadMore}
+          disabled={isFetchingNextPage}
+          className="rounded-md px-3 py-1 text-sm font-medium text-zinc-600 hover:bg-zinc-100 disabled:opacity-60 dark:text-zinc-300 dark:hover:bg-zinc-800"
+        >
+          {isFetchingNextPage ? "Loading…" : "Load more"}
+        </button>
+      </td>
+    </tr>
+  );
+}
+
 // ── Main screen ────────────────────────────────────────────────────────────
 
 const VALID_TABS: SubTab[] = ["sending", "receiving", "metrics"];
@@ -215,11 +256,12 @@ function SendingPane() {
   };
 
   const range = DATE_RANGES[rangeIdx]!;
+  const dq = useDebounced(q, 300);
   const params = {
     ...rangeToParams(range),
     api_key: apiKey || undefined,
     display: statusFilter || undefined,
-    q: q || undefined,
+    q: dq || undefined,
   };
 
   const stats = useQuery({
@@ -230,16 +272,24 @@ function SendingPane() {
     }),
   });
 
-  const list = useQuery({
-    queryKey: ["outbound-list", rangeIdx, statusFilter, apiKey, q],
-    queryFn: () => api.listOutbound(params),
+  const list = useInfiniteQuery({
+    queryKey: ["outbound-list", rangeIdx, statusFilter, apiKey, dq],
+    queryFn: ({ pageParam }) => api.listOutbound({ ...params, cursor: pageParam }),
+    initialPageParam: null as string | null,
+    getNextPageParam: (last) => (last.has_more ? last.next_cursor : null),
   });
+  const rows = list.data?.pages.flatMap((p) => p.data) ?? [];
 
   const apiKeys = useQuery({ queryKey: ["api-keys"], queryFn: api.listApiKeys });
 
   return (
     <div>
       {stats.data && <StatsRow stats={stats.data} />}
+      {stats.error != null && (
+        <p className="mb-4 text-sm text-red-600">
+          Failed to load stats: {String(stats.error)}
+        </p>
+      )}
 
       <FilterBar
         q={q}
@@ -272,14 +322,21 @@ function SendingPane() {
                 </td>
               </tr>
             )}
-            {list.data?.data.length === 0 && (
+            {list.error != null && (
+              <tr>
+                <td colSpan={5} className="px-3 py-6 text-center text-red-600">
+                  Failed to load emails: {String(list.error)}
+                </td>
+              </tr>
+            )}
+            {list.data && rows.length === 0 && (
               <tr>
                 <td colSpan={5} className="px-3 py-6 text-center text-zinc-500">
                   No emails match these filters.
                 </td>
               </tr>
             )}
-            {list.data?.data.map((m) => (
+            {rows.map((m) => (
               <tr
                 key={m.id}
                 onClick={() => setSelected(m.id)}
@@ -304,6 +361,12 @@ function SendingPane() {
                 </td>
               </tr>
             ))}
+            <LoadMoreRow
+              colSpan={5}
+              hasNextPage={list.hasNextPage}
+              isFetchingNextPage={list.isFetchingNextPage}
+              onLoadMore={() => list.fetchNextPage()}
+            />
           </tbody>
         </table>
       </div>
@@ -464,15 +527,20 @@ function ReceivingPane() {
   const [rangeIdx, setRangeIdx] = useState(1);
   const [q, setQ] = useState("");
   const range = DATE_RANGES[rangeIdx]!;
+  const dq = useDebounced(q, 300);
 
-  const list = useQuery({
-    queryKey: ["inbound-list", rangeIdx, q],
-    queryFn: () =>
+  const list = useInfiniteQuery({
+    queryKey: ["inbound-list", rangeIdx, dq],
+    queryFn: ({ pageParam }) =>
       api.listInbound({
         ...rangeToParams(range),
-        q: q || undefined,
+        q: dq || undefined,
+        cursor: pageParam,
       }),
+    initialPageParam: null as string | null,
+    getNextPageParam: (last) => (last.has_more ? last.next_cursor : null),
   });
+  const rows = list.data?.pages.flatMap((p) => p.data) ?? [];
 
   return (
     <div>
@@ -513,14 +581,21 @@ function ReceivingPane() {
                 </td>
               </tr>
             )}
-            {list.data?.data.length === 0 && (
+            {list.error != null && (
+              <tr>
+                <td colSpan={4} className="px-3 py-6 text-center text-red-600">
+                  Failed to load inbound mail: {String(list.error)}
+                </td>
+              </tr>
+            )}
+            {list.data && rows.length === 0 && (
               <tr>
                 <td colSpan={4} className="px-3 py-6 text-center text-zinc-500">
                   No inbound mail in this window.
                 </td>
               </tr>
             )}
-            {list.data?.data.map((m: InboundMessage) => (
+            {rows.map((m: InboundMessage) => (
               <tr key={m.id} className="hover:bg-zinc-50 dark:hover:bg-zinc-900">
                 <td className="px-3 py-2.5">
                   <div className="flex h-7 w-7 items-center justify-center rounded-md bg-zinc-100 text-zinc-600 dark:bg-zinc-800 dark:text-zinc-400">
@@ -538,6 +613,12 @@ function ReceivingPane() {
                 </td>
               </tr>
             ))}
+            <LoadMoreRow
+              colSpan={4}
+              hasNextPage={list.hasNextPage}
+              isFetchingNextPage={list.isFetchingNextPage}
+              onLoadMore={() => list.fetchNextPage()}
+            />
           </tbody>
         </table>
       </div>
@@ -587,6 +668,12 @@ function MetricsPane() {
           ))}
         </Select>
       </div>
+
+      {(stats.error != null || series.error != null) && (
+        <p className="text-sm text-red-600">
+          Failed to load metrics: {String(stats.error ?? series.error)}
+        </p>
+      )}
 
       {stats.data && (
         <div className="rounded-lg border border-zinc-200 bg-white p-4 dark:border-zinc-800 dark:bg-zinc-900">

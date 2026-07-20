@@ -32,7 +32,18 @@ export function AppShell({ children }: { children: ReactNode }) {
 
   const logoutMut = useMutation({
     mutationFn: () => api.logout(),
-    onSuccess: () => qc.invalidateQueries(),
+    onSuccess: () => {
+      // Locally-saved drafts belong to the signed-in session; drop them so
+      // the next user on this browser can't read them.
+      try {
+        for (const key of Object.keys(localStorage)) {
+          if (key.startsWith("compose:draft:")) localStorage.removeItem(key);
+        }
+      } catch {
+        /* localStorage unavailable — nothing to clear */
+      }
+      qc.invalidateQueries();
+    },
   });
 
   return (

@@ -2,6 +2,7 @@ import { QueryClient, QueryClientProvider, useQuery } from "@tanstack/react-quer
 import { RouterProvider } from "@tanstack/react-router";
 import { api, ApiError } from "@/api";
 import { ComposeDrawer } from "@/components/ComposeDrawer";
+import { Button } from "@/components/ui";
 import { ComposeProvider } from "@/lib/compose-store";
 import { LoginScreen } from "@/screens/LoginScreen";
 import { router } from "@/routes";
@@ -41,8 +42,25 @@ function AuthGate() {
       </div>
     );
   }
-  if (me.error instanceof ApiError && me.error.status === 401) {
-    return <LoginScreen />;
+  if (me.error) {
+    // Only a real 401 means "logged out". Anything else (500s, network
+    // failures) gets a retry screen so transient outages don't masquerade
+    // as a logout.
+    if (me.error instanceof ApiError && me.error.status === 401) {
+      return <LoginScreen />;
+    }
+    return (
+      <div className="flex min-h-screen flex-col items-center justify-center gap-3">
+        <p className="text-sm text-zinc-500">Can&apos;t reach server.</p>
+        <Button
+          variant="secondary"
+          onClick={() => me.refetch()}
+          disabled={me.isFetching}
+        >
+          {me.isFetching ? "Retrying…" : "Retry"}
+        </Button>
+      </div>
+    );
   }
   if (!me.data) {
     return <LoginScreen />;

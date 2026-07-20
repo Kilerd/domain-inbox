@@ -14,7 +14,11 @@ import { cn } from "@/lib/utils";
 function draftKey(prefill: ComposePrefill | null): string {
   if (!prefill) return "compose:draft:new";
   if (prefill.mode === "reply" || prefill.mode === "reply-all" || prefill.mode === "forward") {
-    return `compose:draft:${prefill.mode}:${prefill.inReplyTo ?? "no-id"}`;
+    // Forwards carry no In-Reply-To, and some inbound messages lack an
+    // rfc822 Message-ID — fall back to our own message id so drafts for
+    // different source messages never share a key.
+    const id = prefill.inReplyTo ?? prefill.sourceMessageId ?? "no-id";
+    return `compose:draft:${prefill.mode}:${id}`;
   }
   if (prefill.mode === "test") return `compose:draft:test:${prefill.testDomain ?? ""}`;
   return "compose:draft:new";
@@ -44,20 +48,52 @@ function emptyDraft(prefill: ComposePrefill | null): DraftState {
   };
 }
 
-function loadDraft(key: string): DraftState | null {
+// What actually hits localStorage: text fields plus attachment *names* only.
+// Base64 attachment content can easily blow the ~5MB quota, and a throwing
+// setItem used to drop the whole draft — so file bytes are never persisted.
+interface PersistedDraft {
+  from: string;
+  to: string[];
+  cc: string[];
+  bcc: string[];
+  subject: string;
+  body: string;
+  bodyMode: "text" | "html";
+  attachment_names: string[];
+}
+
+interface LoadedDraft {
+  state: DraftState;
+  // Names of attachments that were on the draft when it was saved; their
+  // content is gone, so the user must re-add the files.
+  missingAttachments: string[];
+}
+
+function loadDraft(key: string): LoadedDraft | null {
   try {
     const raw = localStorage.getItem(key);
     if (!raw) return null;
-    const parsed = JSON.parse(raw) as Partial<DraftState>;
+    const parsed = JSON.parse(raw) as Partial<PersistedDraft> & {
+      // Legacy drafts stored full attachments; salvage the names.
+      attachments?: Array<{ filename?: string }>;
+    };
+    const missingAttachments =
+      parsed.attachment_names ??
+      (parsed.attachments ?? [])
+        .map((a) => a.filename ?? "")
+        .filter(Boolean);
     return {
-      from: parsed.from ?? "",
-      to: parsed.to ?? [],
-      cc: parsed.cc ?? [],
-      bcc: parsed.bcc ?? [],
-      subject: parsed.subject ?? "",
-      body: parsed.body ?? "",
-      bodyMode: parsed.bodyMode === "html" ? "html" : "text",
-      attachments: parsed.attachments ?? [],
+      state: {
+        from: parsed.from ?? "",
+        to: parsed.to ?? [],
+        cc: parsed.cc ?? [],
+        bcc: parsed.bcc ?? [],
+        subject: parsed.subject ?? "",
+        body: parsed.body ?? "",
+        bodyMode: parsed.bodyMode === "html" ? "html" : "text",
+        attachments: [],
+      },
+      missingAttachments,
     };
   } catch {
     return null;
@@ -74,10 +110,28 @@ function persistDraft(key: string, draft: DraftState) {
       localStorage.removeItem(key);
       return;
     }
-    localStorage.setItem(key, JSON.stringify(draft));
+    const persisted: PersistedDraft = {
+      from: draft.from,
+      to: draft.to,
+      cc: draft.cc,
+      bcc: draft.bcc,
+      subject: draft.subject,
+      body: draft.body,
+      bodyMode: draft.bodyMode,
+      attachment_names: draft.attachments.map((a) => a.filename),
+    };
+    localStorage.setItem(key, JSON.stringify(persisted));
   } catch {
     // Quota exceeded etc — silently drop; loss-tolerant.
   }
+}
+
+// A usable From needs a non-empty local part AND a non-empty domain —
+// "@example.com" (as left behind by the "…@domain" picker template) is not
+// sendable.
+function isValidFromAddress(addr: string): boolean {
+  const at = addr.indexOf("@");
+  return at > 0 && at < addr.length - 1;
 }
 
 function discardDraft(key: string) {
@@ -94,6 +148,8 @@ export function ComposeDrawer() {
   const [draft, setDraft] = useState<DraftState>(() => emptyDraft(null));
   const [showCcBcc, setShowCcBcc] = useState(false);
   const [err, setErr] = useState<string | null>(null);
+  // Attachment names from a restored draft whose content wasn't persisted.
+  const [missingAttachments, setMissingAttachments] = useState<string[]>([]);
 
   const suggestions = useQuery({
     queryKey: ["compose", "from-suggestions"],
@@ -102,7 +158,7 @@ export function ComposeDrawer() {
     staleTime: 60_000,
   });
   const domainsQ = useQuery({
-    queryKey: ["v1", "domains"],
+    queryKey: ["domains"],
     queryFn: api.listDomains,
     enabled: open,
     staleTime: 60_000,
@@ -118,11 +174,13 @@ export function ComposeDrawer() {
     if (!open) return;
     const saved = loadDraft(dkey);
     if (saved) {
-      setDraft(saved);
-      setShowCcBcc(saved.cc.length > 0 || saved.bcc.length > 0);
+      setDraft(saved.state);
+      setShowCcBcc(saved.state.cc.length > 0 || saved.state.bcc.length > 0);
+      setMissingAttachments(saved.missingAttachments);
     } else {
       setDraft(emptyDraft(prefill));
       setShowCcBcc(Boolean((prefill?.cc?.length ?? 0) + (prefill?.bcc?.length ?? 0)));
+      setMissingAttachments([]);
     }
     setErr(null);
   }, [open, prefill, dkey]);
@@ -182,7 +240,9 @@ export function ComposeDrawer() {
   if (!open) return null;
 
   const canSend =
-    draft.from.trim() && draft.to.length > 0 && !sendMut.isPending;
+    isValidFromAddress(draft.from.trim()) &&
+    draft.to.length > 0 &&
+    !sendMut.isPending;
 
   return (
     <>
@@ -322,12 +382,29 @@ export function ComposeDrawer() {
               attachments={draft.attachments}
               onChange={(attachments) => setDraft((d) => ({ ...d, attachments }))}
             />
+            {missingAttachments.length > 0 && (
+              <p className="mt-1 flex items-start gap-1 text-xs text-amber-600">
+                <span>
+                  Attachment files aren&apos;t saved with drafts — re-add:{" "}
+                  {missingAttachments.join(", ")}
+                </span>
+                <button
+                  type="button"
+                  onClick={() => setMissingAttachments([])}
+                  className="shrink-0 underline hover:text-amber-700"
+                >
+                  dismiss
+                </button>
+              </p>
+            )}
           </div>
 
           {err && <ErrorText>{err}</ErrorText>}
-          {me.data && draft.from && !draft.from.includes("@") && (
+          {me.data && draft.from && !isValidFromAddress(draft.from.trim()) && (
             <p className="mt-2 text-xs text-amber-600">
-              `from` looks malformed (missing @).
+              {draft.from.includes("@")
+                ? "`from` needs a local part before the @ (e.g. hello@domain)."
+                : "`from` looks malformed (missing @)."}
             </p>
           )}
         </div>
@@ -355,7 +432,7 @@ export function ComposeDrawer() {
             Discard
           </Button>
           <span className="ml-auto text-[10px] text-zinc-500">
-            Drafts autosave locally
+            Drafts autosave locally (attachments excluded)
           </span>
         </footer>
       </aside>

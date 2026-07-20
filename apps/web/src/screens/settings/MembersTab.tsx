@@ -26,6 +26,18 @@ export function MembersTab() {
     onSuccess: () => qc.invalidateQueries({ queryKey: ["members"] }),
   });
 
+  // Direct navigation to /settings/members bypasses the owner-gated nav —
+  // show a friendly gate instead of surfacing the raw 403.
+  if (q.error instanceof ApiError && q.error.status === 403) {
+    return (
+      <Panel title="Members">
+        <p className="text-sm text-zinc-500">
+          Only the workspace owner can view and manage members.
+        </p>
+      </Panel>
+    );
+  }
+
   return (
     <div className="space-y-4">
       <Panel
@@ -60,6 +72,7 @@ export function MembersTab() {
 
       <Panel title="Members">
         {q.isLoading && <p className="text-sm text-zinc-500">loading…</p>}
+        {q.error != null && <ErrorText>{String(q.error)}</ErrorText>}
         <ul className="divide-y divide-zinc-100 dark:divide-zinc-800">
           {q.data?.members.map((m) => (
             <li key={m.email} className="flex items-center gap-3 py-2.5">
