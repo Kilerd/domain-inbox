@@ -1,21 +1,24 @@
-# Cloudflare Worker: domain-inbox
+# Cloudflare Worker: domain-inbox-dev
 # Single Worker hosting fetch (API + Static Assets), the email() inbound
 # handler, and a scheduled() cron sweep (scheduled sends + webhook retries).
 #
 # Environments (wrangler named envs do NOT inherit bindings — each env below
 # carries its full set):
-#   - top-level (no --env): production — `pnpm run deploy:prod`
-#   - dev:      domain-inbox-dev      — bound to PRIMARY_DOMAIN for real receive/send tests
-#   - staging:  domain-inbox-staging  — pre-prod
+#   - top-level (no --env): domain-inbox-dev — `pnpm run deploy`
+#   - dev: same Worker and resources — `pnpm run deploy:dev` (compatibility alias)
+#   - staging: domain-inbox-staging — optional template; not provisioned
+# The empty domain-inbox deployment was retired. Keep the top-level and dev
+# settings in sync: both manage the existing Worker with live mail data.
 #
 # Replace every <placeholder> with your own account / resource ids
 # (`wrangler d1 create`, `wrangler r2 bucket create`, `wrangler kv namespace create`).
 
-name = "domain-inbox"
+name = "domain-inbox-dev"
 main = "src/index.ts"
 compatibility_date = "2026-05-15"
 compatibility_flags = ["nodejs_compat"]
 account_id = "f4ea99edb0eb0492ba4ecd74cd86b299"
+workers_dev = true
 
 # Every 2 minutes: due scheduled sends + webhook delivery retries.
 [triggers]
@@ -27,27 +30,30 @@ crons = ["*/2 * * * *"]
 enabled = true
 
 [vars]
-ENV = "prod"
-WORKER_NAME = "domain-inbox"
+ENV = "dev"
+WORKER_NAME = "domain-inbox-dev"
 PRIMARY_DOMAIN = "<your-domain.com>"
-APP_BASE_URL = "https://domain-inbox.kilerd.workers.dev"
+APP_BASE_URL = "https://domain-inbox-dev.kilerd.workers.dev"
+# Only active with the DEV_USER_TOKEN secret and a matching X-Dev-Auth header.
+DEV_USER_EMAIL = "dev@example.com"
+DEV_USER_NAME = "Dev User"
 # Once Cloudflare Access is configured, uncomment these:
 # ACCESS_TEAM_DOMAIN = "<your-team>"
 # ACCESS_AUD = "<application-aud-tag>"
 
 [[d1_databases]]
 binding = "DB"
-database_name = "domain-inbox"
-database_id = "2e8e8eee-e1c0-4e82-abd6-0e4cacb0bcc0"
+database_name = "domain-inbox-dev"
+database_id = "ab23d871-1f38-47cf-91ae-80151da29a38"
 migrations_dir = "migrations"
 
 [[r2_buckets]]
 binding = "R2"
-bucket_name = "domain-inbox"
+bucket_name = "domain-inbox-dev"
 
 [[kv_namespaces]]
 binding = "KV"
-id = "1027035929a64a3eb6b8c24a82a41f64"
+id = "2a2142b94c6947778dc61833afefd930"
 
 [assets]
 directory = "../web/dist"
