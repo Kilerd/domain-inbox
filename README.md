@@ -27,7 +27,7 @@ No SDK swap, no code changes — one env var:
 ```ts
 import { Resend } from "resend";
 
-process.env.RESEND_BASE_URL = "https://domain-inbox.<your-subdomain>.workers.dev/api/v1";
+process.env.RESEND_BASE_URL = "https://domain-inbox-dev.<your-subdomain>.workers.dev/api/v1";
 const resend = new Resend(process.env.RESEND_API_KEY); // re_live_xxx minted in the SPA
 
 await resend.emails.send({
@@ -54,6 +54,10 @@ Compatibility is end-to-end verified by `scripts/resend-compat-smoke.mjs`
 official Svix SDK).
 
 ## Deploy
+
+The active deployment is `domain-inbox-dev`. Both the default deploy command
+and `--env dev` target that Worker and its existing storage. The empty
+`domain-inbox` Worker and its separate storage have been retired.
 
 Deploying is a short `wrangler` session: create D1 / R2 / KV, fill the
 `<placeholder>` ids in `apps/worker/wrangler.toml`, build the SPA, apply
