@@ -32,8 +32,8 @@ enabled = true
 [vars]
 ENV = "dev"
 WORKER_NAME = "domain-inbox-dev"
-PRIMARY_DOMAIN = "<your-domain.com>"
-APP_BASE_URL = "https://domain-inbox-dev.kilerd.workers.dev"
+PRIMARY_DOMAIN = "kilerd.me"
+APP_BASE_URL = "https://domain-inbox.kilerd.me"
 # Only active with the DEV_USER_TOKEN secret and a matching X-Dev-Auth header.
 DEV_USER_EMAIL = "dev@example.com"
 DEV_USER_NAME = "Dev User"
@@ -85,8 +85,8 @@ enabled = true
 [env.dev.vars]
 ENV = "dev"
 WORKER_NAME = "domain-inbox-dev"
-PRIMARY_DOMAIN = "<your-domain.com>"
-APP_BASE_URL = "https://domain-inbox-dev.kilerd.workers.dev"
+PRIMARY_DOMAIN = "kilerd.me"
+APP_BASE_URL = "https://domain-inbox.kilerd.me"
 
 # Dev backdoor — only activates when the request carries `X-Dev-Auth: $DEV_USER_TOKEN`.
 # The token is provisioned via `wrangler secret put DEV_USER_TOKEN --env dev` so it
