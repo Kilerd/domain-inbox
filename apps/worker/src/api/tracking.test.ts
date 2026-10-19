@@ -1,6 +1,6 @@
 import { beforeEach, describe, expect, test, vi } from "vitest";
 import type { Env } from "../env";
-import { rewriteHtmlForTracking } from "./tracking";
+import { decodeHtmlEntities, rewriteHtmlForTracking } from "./tracking";
 
 const BASE = "https://mail.example.test";
 const CLICKS_ONLY = { opens: false, clicks: true };
@@ -76,7 +76,9 @@ describe("rewriteHtmlForTracking — clicks", () => {
       `<a href="https://app.example/verify#t=s3cr3t-token">Verify</a>` +
       `<a href="https://app.example/reset?u=1#k=abc">Reset</a>` +
       `<a href="https://app.example/login&num;magic=xyz">Magic</a>` +
-      `<a href="https://app.example/login&#35;magic=xyz">Magic 2</a>`;
+      `<a href="https://app.example/login&#35;magic=xyz">Magic 2</a>` +
+      `<a href="https://app.example/login&#x23;magic=xyz">Magic 3</a>` +
+      `<a href="https://app.example/login?u=1&amp;v=2&#035;magic=xyz">Magic 4</a>`;
 
     const out = await rewriteHtmlForTracking(html, env, "usr_1", "ob_1", CLICKS_ONLY);
 
@@ -133,6 +135,30 @@ describe("rewriteHtmlForTracking — clicks", () => {
     expect(put).not.toHaveBeenCalled();
   });
 
+  test("stores the entity-decoded URL; attribute text outside href untouched", async () => {
+    const { env, put } = fakeEnv();
+    const html = `<a title="Tom &amp; Jerry" href="https://example.com/p?a=1&amp;b=2&#38;c=&#x33;">p</a>`;
+
+    const out = await rewriteHtmlForTracking(html, env, "usr_1", "ob_1", CLICKS_ONLY);
+
+    expect(out).toMatch(new RegExp(`^<a title="Tom &amp; Jerry" href="${BASE}/t/c/[^"]+">p</a>$`));
+    expect(put).toHaveBeenCalledTimes(1);
+    expect(JSON.parse(put.mock.calls[0]![1]).url).toBe("https://example.com/p?a=1&b=2&c=3");
+  });
+
+  test("checks the scheme on the decoded URL", async () => {
+    const { env, put } = fakeEnv();
+    const tracked = `<a href="&#104;ttps://example.com/x">x</a>`;
+    const skipped = `<a href="mailto&#58;a@example.com">m</a>`;
+
+    const out = await rewriteHtmlForTracking(tracked + skipped, env, "usr_1", "ob_1", CLICKS_ONLY);
+
+    expect(out.endsWith(skipped)).toBe(true);
+    expect(out).not.toContain(tracked);
+    expect(put).toHaveBeenCalledTimes(1);
+    expect(JSON.parse(put.mock.calls[0]![1]).url).toBe("https://example.com/x");
+  });
+
   test("does not rewrite when clicks are off", async () => {
     const { env, put } = fakeEnv();
     const html = `<a href="https://example.com/x">x</a>`;
@@ -144,5 +170,20 @@ describe("rewriteHtmlForTracking — clicks", () => {
 
     expect(out).toBe(html);
     expect(put).not.toHaveBeenCalled();
+  });
+});
+
+describe("decodeHtmlEntities", () => {
+  test("named, decimal and hex references", () => {
+    expect(decodeHtmlEntities("a&amp;b&quot;c&apos;d&lt;e&gt;f&num;g")).toBe(`a&b"c'd<e>f#g`);
+    expect(decodeHtmlEntities("&#38;&#x26;&#X26;&#0038;")).toBe("&&&&");
+  });
+
+  test("leaves unknown or unterminated references alone", () => {
+    expect(decodeHtmlEntities("&copy; &amp &#38 &foo;")).toBe("&copy; &amp &#38 &foo;");
+  });
+
+  test("invalid code points become U+FFFD instead of throwing", () => {
+    expect(decodeHtmlEntities("&#0;&#xD800;&#x110000;&#99999999999;")).toBe("�".repeat(4));
   });
 });

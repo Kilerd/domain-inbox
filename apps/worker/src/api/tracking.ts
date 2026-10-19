@@ -103,13 +103,43 @@ function trackableHref(tag: string): HrefSpan | null {
   return href;
 }
 
+// Character references that realistically show up in href values. Anything
+// else (`&foo;`) is left as written.
+const NAMED_REFS: Record<string, string> = {
+  amp: "&",
+  quot: '"',
+  apos: "'",
+  lt: "<",
+  gt: ">",
+  num: "#",
+};
+
+/**
+ * Decode HTML character references in an attribute value: the named ones in
+ * NAMED_REFS plus decimal `&#NN;` and hex `&#xHH;`. The raw attribute text is
+ * what the browser decodes before following a link, so the tracked URL must
+ * be stored (and redirected to) decoded — `?a=1&amp;b=2` means `?a=1&b=2`.
+ */
+export function decodeHtmlEntities(value: string): string {
+  return value.replace(
+    /&(?:#[xX]([0-9a-fA-F]+)|#([0-9]+)|([a-zA-Z]+));/g,
+    (ref, hex: string | undefined, dec: string | undefined, name: string | undefined) => {
+      if (name !== undefined) return NAMED_REFS[name.toLowerCase()] ?? ref;
+      const cp = hex !== undefined ? parseInt(hex, 16) : parseInt(dec ?? "", 10);
+      // Same substitution browsers make for NUL, surrogates, out of range.
+      if (!(cp > 0 && cp <= 0x10ffff) || (cp >= 0xd800 && cp <= 0xdfff)) return "�";
+      return String.fromCodePoint(cp);
+    },
+  );
+}
+
+/** `url` must already be entity-decoded. */
 function isTrackableUrl(url: string, baseUrl: string): boolean {
   if (!/^https?:\/\//i.test(url)) return false; // mailto:, tel:, #anchor, …
   if (url.startsWith(baseUrl)) return false; // already wrapped
   // A fragment means "this part stays in the browser" (magic links, reset
-  // tokens). `&num;` is the only entity spelling of `#` without a literal
-  // `#` in it (`&#35;` / `&#x23;` already contain one).
-  if (url.includes("#") || /&num;/i.test(url)) return false;
+  // tokens). Checked after decoding, so `&#35;` / `&#x23;` / `&num;` count.
+  if (url.includes("#")) return false;
   return true;
 }
 
@@ -141,14 +171,18 @@ export async function rewriteHtmlForTracking(
     const puts: Promise<void>[] = [];
     out = out.replace(A_TAG_RE, (tag) => {
       const href = trackableHref(tag);
-      if (!href || !isTrackableUrl(href.url, baseUrl)) return tag;
+      if (!href) return tag;
+      // Decode for the checks and for storage; the tag text outside the href
+      // value is never touched, and the value itself is replaced wholesale.
+      const url = decodeHtmlEntities(href.url);
+      if (!isTrackableUrl(url, baseUrl)) return tag;
       const token = crypto.randomUUID();
       // Start the KV write now (single-pass rewrite) and await the batch
       // below — an un-awaited put can be dropped, leaving a 404 link.
       puts.push(
         env.KV.put(
           `tok:c:${token}`,
-          JSON.stringify({ outbound_id: outboundId, owner_id: ownerId, url: href.url }),
+          JSON.stringify({ outbound_id: outboundId, owner_id: ownerId, url }),
           { expirationTtl: ttl },
         ),
       );
