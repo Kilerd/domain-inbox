@@ -109,10 +109,15 @@ async function createDomain(
 
   const id = newId.domain();
   const now = Date.now();
+  // click_tracking is set to 0 explicitly: the column default (migration
+  // 0005) is 1, but rewriting links copies any secret they carry (reset /
+  // magic / verification tokens) into KV, events and webhooks. Senders opt
+  // in per request with `tracking: { clicks: true }`. open_tracking keeps
+  // the column default.
   await env.DB
     .prepare(
-      `INSERT INTO domains (id, owner_id, domain, verification_status, catch_all_enabled, created_at)
-       VALUES (?1, ?2, ?3, 'pending', 1, ?4)`,
+      `INSERT INTO domains (id, owner_id, domain, verification_status, catch_all_enabled, click_tracking, created_at)
+       VALUES (?1, ?2, ?3, 'pending', 1, 0, ?4)`,
     )
     .bind(id, user.id, name, now)
     .run();

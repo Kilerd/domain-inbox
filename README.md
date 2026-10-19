@@ -53,6 +53,46 @@ Compatibility is end-to-end verified by `scripts/resend-compat-smoke.mjs`
 `scripts/webhook-signature-check.mjs` (cross-checks signatures with the
 official Svix SDK).
 
+### Open & click tracking
+
+Each sending domain has two defaults, `open_tracking` and `click_tracking`
+(columns on the `domains` table). A per-request `tracking` field on
+`POST /api/v1/emails` overrides them for that one message; omit a key to
+fall back to the domain default:
+
+```bash
+curl -X POST "https://domain-inbox.<your-subdomain>.workers.dev/api/v1/emails" \
+  -H "Authorization: Bearer re_live_xxx" -H "Content-Type: application/json" \
+  -d '{
+    "from": "auth@your-domain.com",
+    "to": ["someone@example.com"],
+    "subject": "Reset your password",
+    "html": "<a href=\"https://app.example.com/reset?t=…\">Reset</a>",
+    "tracking": {"opens": false, "clicks": false}
+  }'
+```
+
+`tracking` is a domain-inbox extension: the official Resend SDK only
+forwards fields it knows and drops it, so SDK users rely on the domain
+default and the per-link rules below.
+
+- **New domains have click tracking off** (`click_tracking = 0`); open
+  tracking stays on. Click tracking swaps each link for a
+  `/t/c/<token>` redirect and keeps the original URL in KV (90 days),
+  `email.clicked` events and webhook payloads. That is a bad place for
+  one-time secrets, so opt in deliberately: per request with
+  `"tracking": {"clicks": true}`, or per domain with
+  `UPDATE domains SET click_tracking = 1 WHERE domain = '…'`.
+  Domains created before this default changed keep the setting they have.
+- **Some links are never rewritten**, even with click tracking on:
+  - links whose `href` contains a fragment (`#…`, e.g.
+    `https://app.example.com/verify#t=…`) — the fragment is how a sender
+    keeps a secret in the browser, so the link is left as is;
+  - links on an `<a>` carrying `data-no-track` or `data-pm-no-track`
+    (any value, e.g. `<a data-no-track href="…">`) — use this for
+    verification, reset, magic-link and invite links;
+  - `mailto:`, `tel:`, relative and in-page anchor links.
+
 ## Deploy
 
 Deploying is a short `wrangler` session: create D1 / R2 / KV, fill the
