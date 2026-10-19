@@ -282,6 +282,14 @@ export async function handleClickRedirect(
     return new Response("tracking link expired", { status: 404 });
   }
   const payload = JSON.parse(raw) as ClickTokenPayload;
+  // Serialize through URL so non-ASCII hosts/paths become punycode /
+  // percent-encoding — a raw `中` in a Location header makes Response throw.
+  let location: string;
+  try {
+    location = new URL(payload.url).href;
+  } catch {
+    return new Response("invalid tracking link", { status: 404 });
+  }
   await env.DB
     .prepare(
       `UPDATE outbound_messages
@@ -317,6 +325,6 @@ export async function handleClickRedirect(
   if (ctx) ctx.waitUntil(dispatch);
   return new Response(null, {
     status: 302,
-    headers: { location: payload.url, "cache-control": "no-store" },
+    headers: { location, "cache-control": "no-store" },
   });
 }
