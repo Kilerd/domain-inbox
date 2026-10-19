@@ -30,23 +30,24 @@ pnpm exec wrangler secret put CLOUDFLARE_API_TOKEN --env dev
 
 That's optional convenience — not a real blocker.
 
-### Cloudflare Access (before promoting to staging/prod)
+### Cloudflare Access
 
 The dev worker has an auth backdoor gated on the `DEV_USER_TOKEN` secret
-(requests must carry a matching `X-Dev-Auth` header). For prod:
+(requests must carry a matching `X-Dev-Auth` header). To configure Access
+on the retained `domain-inbox-dev` Worker:
 
 1. Zero Trust → Access → Applications → Add → Self-hosted
-2. Application domain: `<your worker subdomain>.workers.dev`
+2. Application domain: `domain-inbox-dev.<your worker subdomain>.workers.dev`
 3. Identity provider: One-Time PIN (email) or your IdP
 4. Policy: Allow → emails listed
 5. Copy the **AUD tag**
-6. In `apps/worker/wrangler.toml`, under the top-level `[vars]`
-   (the top-level config *is* production — there is no `[env.prod]`):
+6. In `apps/worker/wrangler.toml`, under both `[vars]` and `[env.dev.vars]`
+   (both deployment commands target the same Worker):
    ```toml
    ACCESS_TEAM_DOMAIN = "<your-team>"
    ACCESS_AUD = "<aud-tag>"
    ```
-7. `pnpm exec wrangler deploy` (or `pnpm --filter @domain-inbox/worker run deploy:prod`)
+7. `pnpm exec wrangler deploy` (or `pnpm --filter @domain-inbox/worker run deploy`)
 
 ## Key learning (from real-world testing)
 
