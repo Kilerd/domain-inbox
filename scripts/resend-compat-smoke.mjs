@@ -36,19 +36,18 @@ process.env.RESEND_BASE_URL = BASE_URL;
 const resend = new Resend(API_TOKEN);
 const idem = `compat-${Date.now()}`;
 
+const payload = {
+  from: `Domain Inbox <hello@${FROM_DOMAIN}>`,
+  to: [RECIPIENT],
+  subject: "Resend SDK compat probe",
+  html: "<p>Hello from <b>resend-node</b>.</p>",
+  text: "Hello from resend-node.",
+  headers: { "X-Compat-Probe": idem },
+  tags: [{ name: "test", value: "compat" }],
+};
+
 console.log(`> POST ${BASE_URL}/emails (idem=${idem})`);
-const sent = await resend.emails.send(
-  {
-    from: `Domain Inbox <hello@${FROM_DOMAIN}>`,
-    to: [RECIPIENT],
-    subject: "Resend SDK compat probe",
-    html: "<p>Hello from <b>resend-node</b>.</p>",
-    text: "Hello from resend-node.",
-    headers: { "X-Compat-Probe": idem },
-    tags: [{ name: "test", value: "compat" }],
-  },
-  { idempotencyKey: idem },
-);
+const sent = await resend.emails.send(payload, { idempotencyKey: idem });
 console.log("  send result:", JSON.stringify(sent));
 if (sent.error) {
   console.error("send failed");
@@ -56,20 +55,23 @@ if (sent.error) {
 }
 const id = sent.data.id;
 
-console.log(`> POST again with same idempotency-key — expect same id`);
-const sent2 = await resend.emails.send(
-  {
-    from: `hello@${FROM_DOMAIN}`,
-    to: [RECIPIENT],
-    subject: "Resend SDK compat probe",
-    text: "Hello",
-  },
-  { idempotencyKey: idem },
-);
+console.log(`> POST again with same idempotency-key + payload — expect same id`);
+const sent2 = await resend.emails.send(payload, { idempotencyKey: idem });
 console.log("  replay result:", JSON.stringify(sent2));
 if (sent2.data?.id !== id) {
   console.error(`idempotency replay returned different id: ${sent2.data?.id} (expected ${id})`);
   process.exit(3);
+}
+
+console.log(`> POST same idempotency-key, different payload — expect invalid_idempotent_request`);
+const sent3 = await resend.emails.send(
+  { ...payload, text: "Different payload." },
+  { idempotencyKey: idem },
+);
+console.log("  mismatch result:", JSON.stringify(sent3));
+if (sent3.error?.name !== "invalid_idempotent_request") {
+  console.error(`expected invalid_idempotent_request, got: ${JSON.stringify(sent3)}`);
+  process.exit(6);
 }
 
 console.log(`> GET ${BASE_URL}/emails/${id}`);

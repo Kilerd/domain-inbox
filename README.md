@@ -48,6 +48,12 @@ await resend.emails.send({
 | Webhooks (Svix signature)  |   ✅   |
 | Tags, headers, attachments |   ✅   |
 
+`Idempotency-Key` follows Resend: for 24 h after the first request, a retry
+with the same key and payload returns the original id without sending again,
+and the same key with a different payload is rejected with
+`409 invalid_idempotent_request`. After 24 h the key can be reused, and a request
+that uses it is sent as a new email.
+
 Compatibility is end-to-end verified by `scripts/resend-compat-smoke.mjs`
 (runs the unmodified `resend` package against the Worker) and
 `scripts/webhook-signature-check.mjs` (cross-checks signatures with the

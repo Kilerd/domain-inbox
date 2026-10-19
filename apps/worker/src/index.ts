@@ -13,6 +13,7 @@ import {
   patchOutboundMessage,
   processScheduledSends,
 } from "./api/emails";
+import { releaseExpiredIdempotencyKeys } from "./api/idempotency";
 import { handleImgProxy } from "./api/img_proxy";
 import { handleInbox } from "./api/inbox";
 import { handleSuppressions } from "./api/suppressions";
@@ -48,11 +49,12 @@ export default {
     await handleInboundEmail(message, env, ctx);
   },
 
-  // Cron sweep (see wrangler.toml [triggers]): due scheduled sends + webhook
-  // delivery retries.
+  // Cron sweep (see wrangler.toml [triggers]): due scheduled sends, webhook
+  // delivery retries, and releasing Idempotency-Keys past their 24 h window.
   async scheduled(_controller: ScheduledController, env: Env, ctx: ExecutionContext): Promise<void> {
     ctx.waitUntil(processScheduledSends(env, ctx));
     ctx.waitUntil(retryPendingWebhookDeliveries(env));
+    ctx.waitUntil(releaseExpiredIdempotencyKeys(env));
   },
 } satisfies ExportedHandler<Env>;
 

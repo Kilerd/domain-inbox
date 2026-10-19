@@ -110,8 +110,9 @@ hole). Set it to the exact URL users will visit.
 ### 4. Apply D1 migrations
 
 Migrations live in `apps/worker/migrations/` (currently `0001` through
-`0007_dedup_scope_webhook_retry.sql`). Apply them to the remote database
-after creating it — and again whenever you pull a version that adds one:
+`0008_idempotency_request_hash.sql`). Apply them to the remote database
+after creating it — and again, **before** `wrangler deploy`, whenever you
+pull a version that adds one (the new Worker code expects the new columns):
 
 ```bash
 cd apps/worker
