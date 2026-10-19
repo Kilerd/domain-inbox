@@ -1,6 +1,14 @@
 import { EmailMessage } from "cloudflare:email";
 import { createMimeMessage } from "mimetext";
 import type { ApiKeyAuth } from "./apikey_auth";
+import {
+  cacheIdempotentSend,
+  checkIdempotencyKey,
+  requestFingerprint,
+  resolveReservationConflict,
+  type IdempotentReply,
+  type IdempotentSend,
+} from "./idempotency";
 import { suppressionHits } from "./suppressions";
 import { getTemplateById, renderTemplate } from "./templates";
 import { rewriteHtmlForTracking } from "./tracking";
@@ -80,6 +88,9 @@ export async function handleEmailSend(
   } catch {
     return httpError.badRequest("request body must be JSON");
   }
+  // Fingerprint the payload exactly as the client sent it, before template
+  // rendering mutates `body`, so a replay compares like with like.
+  const requestHash = idempotencyKey ? await requestFingerprint(body) : null;
 
   if (typeof body.from !== "string" || !body.from.trim()) {
     return httpError.validation("`from` is required");
@@ -134,41 +145,20 @@ export async function handleEmailSend(
     return httpError.forbidden(`API key not scoped to send from ${fromDomain}`);
   }
 
-  // Idempotency: return prior outbound id on replay. The KV entry is only
-  // written after a *successful* send, so a KV hit is always replayable as
-  // 200. A DB hit can be an in-flight or failed attempt: in-flight replays
-  // return the same id; failed attempts release the key so the client's
-  // retry actually re-sends instead of replaying the failure as success.
-  if (idempotencyKey) {
-    const cached = await env.KV.get(
-      `idem:${key.user_id}:${idempotencyKey}`,
-      "text",
-    );
-    if (cached) return Response.json({ id: cached });
-    const existing = await env.DB
-      .prepare(
-        `SELECT id, status FROM outbound_messages WHERE owner_id = ?1 AND idempotency_key = ?2`,
-      )
-      .bind(key.user_id, idempotencyKey)
-      .first<{ id: string; status: string }>();
-    if (existing && existing.status !== "failed") {
-      await env.KV.put(`idem:${key.user_id}:${idempotencyKey}`, existing.id, {
-        expirationTtl: 86400,
-      });
-      return Response.json({ id: existing.id });
-    }
-    if (existing) {
-      await env.DB
-        .prepare(
-          `UPDATE outbound_messages SET idempotency_key = NULL WHERE id = ?1 AND status = 'failed'`,
-        )
-        .bind(existing.id)
-        .run();
-    }
+  const now = Date.now();
+
+  // Idempotency (Resend semantics, see ./idempotency): within 24 h of the
+  // original request a replay returns the prior id (in-flight included) or
+  // 409 if the payload differs; a failed attempt or an expired key is
+  // released so the request below reserves a fresh row and actually sends.
+  let idempotency: IdempotentSend | null = null;
+  if (idempotencyKey && requestHash) {
+    const outcome = await checkIdempotencyKey(env, key.user_id, idempotencyKey, requestHash, now);
+    if (outcome.kind !== "proceed") return idempotencyResponse(outcome);
+    idempotency = { key: idempotencyKey, hash: requestHash, createdAt: now };
   }
 
   const outboundId = newId.outbound();
-  const now = Date.now();
   const trackingFlag = tracking.opens || tracking.clicks ? 1 : 0;
 
   // Scheduling: a future scheduled_at defers the actual send to the cron
@@ -184,37 +174,39 @@ export async function handleEmailSend(
 
   // Pre-record so failures are observable. UNIQUE(owner_id, idempotency_key)
   // doubles as the atomic idempotency reservation: a concurrent duplicate
-  // loses the insert race and is answered with the winner's id.
+  // loses the insert race and is answered from the winner's row.
   try {
     await env.DB
       .prepare(
         `INSERT INTO outbound_messages
-           (id, owner_id, api_key_id, idempotency_key, status, channel,
+           (id, owner_id, api_key_id, idempotency_key, idempotency_hash, status, channel,
             request_json, attempts, template_id, tracking_enabled, scheduled_at, created_at)
-         VALUES (?1, ?2, ?3, ?4, ?9, 'cf_native', ?5, 0, ?6, ?7, ?10, ?8)`,
+         VALUES (?1, ?2, ?3, ?4, ?11, ?9, 'cf_native', ?5, 0, ?6, ?7, ?10, ?8)`,
       )
       .bind(
         outboundId,
         key.user_id,
         key.key_id,
-        idempotencyKey ?? null,
+        idempotency?.key ?? null,
         JSON.stringify(body),
         templateId,
         trackingFlag,
         now,
         scheduledAt ? "scheduled" : "sending",
         scheduledAt,
+        idempotency?.hash ?? null,
       )
       .run();
   } catch (err) {
-    if (idempotencyKey && /UNIQUE constraint failed/i.test(String(err))) {
-      const winner = await env.DB
-        .prepare(
-          `SELECT id FROM outbound_messages WHERE owner_id = ?1 AND idempotency_key = ?2`,
-        )
-        .bind(key.user_id, idempotencyKey)
-        .first<{ id: string }>();
-      if (winner) return Response.json({ id: winner.id });
+    if (idempotency && /UNIQUE constraint failed/i.test(String(err))) {
+      const outcome = await resolveReservationConflict(
+        env,
+        key.user_id,
+        idempotency.key,
+        idempotency.hash,
+        now,
+      );
+      if (outcome) return idempotencyResponse(outcome);
     }
     throw err;
   }
@@ -225,7 +217,7 @@ export async function handleEmailSend(
 
   return executeSend(env, ctx, key.user_id, body, {
     outboundId,
-    idempotencyKey,
+    idempotency,
     from,
     to,
     cc,
@@ -235,6 +227,12 @@ export async function handleEmailSend(
     dom,
     tracking,
   });
+}
+
+function idempotencyResponse(outcome: IdempotentReply): Response {
+  return outcome.kind === "replay"
+    ? Response.json({ id: outcome.id })
+    : httpError.invalidIdempotentRequest();
 }
 
 interface PreparedSend {
@@ -326,7 +324,7 @@ async function prepareSendContext(
 
 interface SendContext {
   outboundId: string;
-  idempotencyKey: string | null;
+  idempotency: IdempotentSend | null;
   from: Addr;
   to: Addr[];
   cc: Addr[];
@@ -353,7 +351,7 @@ async function executeSend(
       503,
     );
   }
-  const { outboundId, idempotencyKey, from, to, cc, bcc, replyTo, fromDomain, dom, tracking } = sc;
+  const { outboundId, idempotency, from, to, cc, bcc, replyTo, fromDomain, dom, tracking } = sc;
   const messageId = newId.message();
   // We mint the RFC-5322 Message-ID at actual send time so it goes into the
   // outgoing MIME headers AND is what we persist; subsequent replies will
@@ -445,11 +443,16 @@ async function executeSend(
     )
     .run();
   // Cache the idempotency mapping only for successful sends; failed attempts
-  // must stay retryable under the same key.
-  if (idempotencyKey && status === "sent") {
-    await env.KV.put(`idem:${userId}:${idempotencyKey}`, outboundId, {
-      expirationTtl: 86400,
-    });
+  // must stay retryable under the same key. The TTL is the remainder of the
+  // key's 24 h window, never a fresh 24 h.
+  if (idempotency && status === "sent") {
+    await cacheIdempotentSend(
+      env.KV,
+      userId,
+      idempotency.key,
+      { id: outboundId, hash: idempotency.hash, createdAt: idempotency.createdAt },
+      Date.now(),
+    );
   }
 
   // Persist the sent mail into messages/threads so it appears in the inbox
@@ -614,7 +617,7 @@ export async function processScheduledSends(env: Env, ctx: ExecutionContext): Pr
       }
       const res = await executeSend(env, ctx, row.owner_id, body, {
         outboundId: row.id,
-        idempotencyKey: null,
+        idempotency: null,
         from: prep.from,
         to: prep.to,
         cc: prep.cc,

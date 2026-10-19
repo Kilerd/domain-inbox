@@ -7,6 +7,7 @@ export type ApiErrorName =
   | "rate_limit_exceeded"
   | "not_found"
   | "forbidden"
+  | "invalid_idempotent_request"
   | "internal_error";
 
 export interface ApiError {
@@ -33,5 +34,10 @@ export const httpError = {
   forbidden: (message: string) => errorResponse("forbidden", message, 403),
   notFound: (message: string) => errorResponse("not_found", message, 404),
   conflict: (message: string) => errorResponse("validation_error", message, 409),
+  // Resend: same Idempotency-Key reused with a different payload inside the
+  // 24 h window.
+  invalidIdempotentRequest: (
+    message = "Same idempotency key used with a different request payload. Change your idempotency key or payload.",
+  ) => errorResponse("invalid_idempotent_request", message, 409),
   internal: (message: string, status = 500) => errorResponse("internal_error", message, status),
 };
