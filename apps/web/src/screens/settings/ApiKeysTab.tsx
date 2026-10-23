@@ -8,14 +8,20 @@ export function ApiKeysTab() {
   const qc = useQueryClient();
   const keys = useQuery({ queryKey: ["api-keys"], queryFn: api.listApiKeys });
   const [name, setName] = useState("");
+  const [serviceToken, setServiceToken] = useState(false);
   const [lastCreated, setLastCreated] = useState<ApiKeyCreated | null>(null);
   const [err, setErr] = useState<string | null>(null);
 
   const createMut = useMutation({
-    mutationFn: () => api.createApiKey({ name: name.trim() || undefined }),
+    mutationFn: () =>
+      api.createApiKey({
+        name: name.trim() || undefined,
+        scopes: serviceToken ? ["inbox.read"] : undefined,
+      }),
     onSuccess: (k) => {
       setLastCreated(k);
       setName("");
+      setServiceToken(false);
       setErr(null);
       qc.invalidateQueries({ queryKey: ["api-keys"] });
     },
@@ -31,7 +37,7 @@ export function ApiKeysTab() {
     <div className="space-y-4">
       <Panel
         title="Create API key"
-        description="Resend SDKs use these via `Authorization: Bearer re_live_…`."
+        description="Resend SDKs use these via `Authorization: Bearer re_live_…`. Service tokens use the same header."
       >
         <form
           className="flex gap-2"
@@ -50,6 +56,25 @@ export function ApiKeysTab() {
             {createMut.isPending ? "Creating…" : "Create key"}
           </Button>
         </form>
+        <label className="mt-3 flex items-start gap-2 text-xs text-zinc-600 dark:text-zinc-400">
+          <input
+            type="checkbox"
+            checked={serviceToken}
+            onChange={(e) => setServiceToken(e.target.checked)}
+            disabled={createMut.isPending}
+            className="mt-0.5 h-3.5 w-3.5 shrink-0 rounded border-zinc-300 dark:border-zinc-600"
+          />
+          <span>
+            <span className="font-medium text-zinc-800 dark:text-zinc-200">
+              Service token — read-only inbox
+            </span>
+            <span className="mt-0.5 block">
+              Grants <code className="font-mono">inbox.read</code> for every domain
+              you own, so cron jobs and ops scripts can fetch received mail with
+              the bearer API. Cannot send, reply, or modify anything.
+            </span>
+          </span>
+        </label>
         {err && <ErrorText>{err}</ErrorText>}
 
         {lastCreated && (

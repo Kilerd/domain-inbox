@@ -144,6 +144,42 @@ async function tryBearer(
   env: Env,
   ctx: ExecutionContext,
 ): Promise<Response | null> {
+  // Service tokens: an API key with `inbox.read` can pull received mail for
+  // every domain the owner has, without a browser session. Read-only on
+  // purpose — writes (compose, flags, alias edits) still require the SPA's
+  // session auth, so a leaked automation token can't send or delete anything.
+  //
+  // Only take this path when a bearer token was actually presented: the SPA
+  // calls the same /api/inbox/* routes with cookies and no Authorization
+  // header, and must keep falling through to the session verifier.
+  if (url.pathname === "/api/inbox" || url.pathname.startsWith("/api/inbox/")) {
+    const authorization = req.headers.get("Authorization") ?? "";
+    if (!authorization.startsWith("Bearer ")) return null;
+
+    const k = await authenticateApiKey(req, env);
+    if (k.kind === "error") return k.response;
+    if (req.method !== "GET") {
+      return httpError.forbidden(
+        "API keys are read-only for the inbox; use a browser session to modify mail",
+      );
+    }
+    if (!k.auth.scopes.includes("inbox.read")) {
+      return httpError.forbidden("API key is missing the inbox.read scope");
+    }
+    if (k.auth.domain_scope && k.auth.domain_scope.length > 0) {
+      return httpError.forbidden(
+        "inbox.read requires an account-wide API key (domain_scope must be empty)",
+      );
+    }
+    return handleInbox(
+      url,
+      req,
+      env,
+      { id: k.auth.user_id, email: "", name: null, is_new: false },
+      ctx,
+    );
+  }
+
   // All Resend-style endpoints are gated on the bearer-token auth path.
   // Match the route first; only run auth when we're going to actually serve.
   if (url.pathname === "/api/v1/emails" && req.method === "POST") {

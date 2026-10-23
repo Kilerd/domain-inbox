@@ -99,6 +99,37 @@ default and the per-link rules below.
     verification, reset, magic-link and invite links;
   - `mailto:`, `tel:`, relative and in-page anchor links.
 
+### Service tokens (read-only inbox API)
+
+For automation that needs to pull received mail (ops scripts, cron jobs, CI
+probes), create a **service token** in *Settings → API Keys* by ticking
+*Service token — read-only inbox*. It is a normal `re_live_…` API key with the
+`inbox.read` scope and no domain restriction, so it covers every domain you
+own:
+
+```bash
+TOKEN=re_live_xxx
+BASE=https://domain-inbox.<your-subdomain>.workers.dev
+
+# Threads, newest first (any SPA view: inbox, unread, archived, …)
+curl -H "Authorization: Bearer $TOKEN" "$BASE/api/inbox/threads?view=inbox&limit=20"
+# One conversation, full message metadata
+curl -H "Authorization: Bearer $TOKEN" "$BASE/api/inbox/threads/<thread_id>/messages"
+# Rendered body of one message
+curl -H "Authorization: Bearer $TOKEN" "$BASE/api/inbox/messages/<message_id>/body"
+# Attachment bytes
+curl -H "Authorization: Bearer $TOKEN" "$BASE/api/inbox/attachments/<attachment_id>" -o file.pdf
+# Domains / aliases and the live SSE feed
+curl -H "Authorization: Bearer $TOKEN" "$BASE/api/inbox/domains"
+curl -N -H "Authorization: Bearer $TOKEN" "$BASE/api/inbox/stream"
+```
+
+`inbox.read` is **read-only**: every GET under `/api/inbox/*` works, but
+`POST`/`PATCH`/`DELETE` (compose, mark-read, flags, alias edits) return `403`
+and still require a browser session. Keys with a non-empty `domain_scope` are
+rejected for inbox reads — a service token is deliberately account-wide.
+Revoke it like any other key; cached auth entries expire within 5 minutes.
+
 ## Deploy
 
 The active deployment is `domain-inbox-dev`. Both the default deploy command

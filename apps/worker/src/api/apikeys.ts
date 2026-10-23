@@ -4,6 +4,9 @@ import { httpError } from "../http";
 import { newId } from "../ids";
 import { newToken, sha256Hex, tokenPrefix } from "./apikey_auth";
 
+const DEFAULT_SCOPES = ["emails.send", "emails.read", "domains.read"] as const;
+const KNOWN_SCOPES = new Set<string>([...DEFAULT_SCOPES, "inbox.read"]);
+
 interface ApiKeyRow {
   id: string;
   owner_id: string;
@@ -71,10 +74,28 @@ async function createKey(req: Request, env: Env, user: AuthUser): Promise<Respon
     return httpError.badRequest("request body must be JSON");
   }
   const name = typeof body.name === "string" ? body.name.trim() : null;
-  const scopes = Array.isArray(body.scopes) && body.scopes.every((s) => typeof s === "string")
-    ? (body.scopes as string[])
-    : ["emails.send", "emails.read", "domains.read"];
-  const domainScope = Array.isArray(body.domain_scope) && body.domain_scope.every((s) => typeof s === "string")
+
+  if (body.scopes !== undefined) {
+    if (!Array.isArray(body.scopes) || !body.scopes.every((s) => typeof s === "string")) {
+      return httpError.validation("`scopes` must be an array of strings");
+    }
+    const unknown = (body.scopes as string[]).filter((s) => !KNOWN_SCOPES.has(s));
+    if (unknown.length > 0) {
+      return httpError.validation(
+        `unknown scope(s): ${unknown.join(", ")} (supported: ${[...KNOWN_SCOPES].join(", ")})`,
+      );
+    }
+  }
+  const scopes = body.scopes === undefined
+    ? [...DEFAULT_SCOPES]
+    : (body.scopes as string[]);
+
+  if (body.domain_scope !== undefined && body.domain_scope !== null) {
+    if (!Array.isArray(body.domain_scope) || !body.domain_scope.every((s) => typeof s === "string")) {
+      return httpError.validation("`domain_scope` must be an array of strings or null");
+    }
+  }
+  const domainScope = Array.isArray(body.domain_scope)
     ? (body.domain_scope as string[])
     : null;
 
