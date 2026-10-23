@@ -397,7 +397,7 @@ export function ComposeDrawer() {
                   ? "<p>Type HTML here…</p>"
                   : "Type your message…"
               }
-              className="mt-1 min-h-[280px] resize-y font-mono"
+              className="mt-1 min-h-[200px] resize-y font-mono sm:min-h-[280px]"
             />
           </div>
 
@@ -433,7 +433,7 @@ export function ComposeDrawer() {
           )}
         </div>
 
-        <footer className="flex shrink-0 items-center gap-2 border-t border-zinc-200 px-4 py-3 dark:border-zinc-800">
+        <footer className="flex shrink-0 items-center gap-2 border-t border-zinc-200 px-4 pt-3 pb-[calc(0.75rem_+_env(safe-area-inset-bottom))] dark:border-zinc-800 sm:pb-3">
           <Button
             variant="primary"
             onClick={() => sendMut.mutate()}
@@ -455,7 +455,7 @@ export function ComposeDrawer() {
           >
             Discard
           </Button>
-          <span className="ml-auto text-[10px] text-zinc-500">
+          <span className="ml-auto hidden text-[10px] text-zinc-500 sm:inline">
             Drafts autosave locally (attachments excluded)
           </span>
         </footer>
@@ -562,7 +562,7 @@ function FromField({
                 value={value}
                 onChange={(e) => onChange(e.target.value)}
                 placeholder="local-part@verified-domain"
-                className="mt-1 block w-full rounded border border-zinc-200 bg-white px-2 py-1 font-mono text-sm placeholder:text-zinc-400 focus:border-blue-500 focus:outline-none focus:ring-1 focus:ring-blue-500 dark:border-zinc-700 dark:bg-zinc-900 dark:placeholder:text-zinc-500"
+                className="mt-1 block w-full rounded border border-zinc-200 bg-white px-2 py-1 font-mono text-base sm:text-sm placeholder:text-zinc-400 focus:border-blue-500 focus:outline-none focus:ring-1 focus:ring-blue-500 dark:border-zinc-700 dark:bg-zinc-900 dark:placeholder:text-zinc-500"
               />
             </div>
           </div>

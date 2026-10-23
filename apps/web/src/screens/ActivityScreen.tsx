@@ -192,9 +192,9 @@ export function ActivityScreen() {
 
   return (
     <div className="flex-1 overflow-y-auto">
-      <div className="mx-auto max-w-6xl px-6 py-6">
+      <div className="mx-auto max-w-6xl px-4 py-4 sm:px-6 sm:py-6">
         <h1 className="mb-3 text-lg font-medium">Emails</h1>
-        <div className="mb-6 flex border-b border-zinc-200 dark:border-zinc-800">
+        <div className="mb-6 flex overflow-x-auto border-b border-zinc-200 dark:border-zinc-800">
           {(
             [
               { id: "sending", label: "Sending" },
@@ -207,7 +207,7 @@ export function ActivityScreen() {
               to="/activity/$tab"
               params={{ tab: t.id }}
               className={cn(
-                "border-b-2 px-4 py-2 text-sm font-medium transition-colors",
+                "shrink-0 whitespace-nowrap border-b-2 px-3 py-2 text-sm font-medium transition-colors sm:px-4",
                 tab === t.id
                   ? "border-blue-600 text-blue-700 dark:border-blue-500 dark:text-blue-300"
                   : "border-transparent text-zinc-500 hover:text-zinc-800 dark:hover:text-zinc-200",
@@ -303,8 +303,8 @@ function SendingPane() {
         apiKeys={apiKeys.data ?? []}
       />
 
-      <div className="mt-4 overflow-hidden rounded-lg border border-zinc-200 dark:border-zinc-800">
-        <table className="w-full text-sm">
+      <div className="mt-4 overflow-x-auto rounded-lg border border-zinc-200 dark:border-zinc-800">
+        <table className="w-full min-w-[640px] text-sm">
           <thead className="bg-zinc-50 text-xs uppercase text-zinc-500 dark:bg-zinc-900/50">
             <tr>
               <th className="w-12 px-3 py-2"></th>
@@ -395,7 +395,7 @@ function StatusIcon({ status }: { status: string }) {
 
 function StatsRow({ stats }: { stats: OutboundStats }) {
   return (
-    <div className="mb-4 grid grid-cols-4 gap-3">
+    <div className="mb-4 grid grid-cols-2 gap-3 sm:grid-cols-4">
       <StatCard label="Emails" value={String(stats.total)} />
       <StatCard
         label="Deliverability"
@@ -466,13 +466,13 @@ function FilterBar({
 }) {
   return (
     <div className="flex flex-wrap items-center gap-2">
-      <div className="relative min-w-[200px] flex-1">
+      <div className="relative min-w-0 flex-1 basis-full sm:basis-auto">
         <Search className="pointer-events-none absolute left-2.5 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-zinc-400" />
         <input
           value={q}
           onChange={(e) => onQ(e.target.value)}
           placeholder="Search subject, from, to…"
-          className="w-full rounded-md border border-zinc-200 bg-white px-8 py-1.5 text-sm placeholder:text-zinc-400 focus:border-blue-500 focus:outline-none focus:ring-1 focus:ring-blue-500 dark:border-zinc-700 dark:bg-zinc-900 dark:placeholder:text-zinc-500"
+          className="w-full rounded-md border border-zinc-200 bg-white px-8 py-1.5 text-base placeholder:text-zinc-400 sm:text-sm focus:border-blue-500 focus:outline-none focus:ring-1 focus:ring-blue-500 dark:border-zinc-700 dark:bg-zinc-900 dark:placeholder:text-zinc-500"
         />
       </div>
       <Select
@@ -528,13 +528,13 @@ function ReceivingPane() {
   return (
     <div>
       <div className="flex flex-wrap items-center gap-2">
-        <div className="relative min-w-[200px] flex-1">
+        <div className="relative min-w-0 flex-1 basis-full sm:basis-auto">
           <Search className="pointer-events-none absolute left-2.5 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-zinc-400" />
           <input
             value={q}
             onChange={(e) => setQ(e.target.value)}
             placeholder="Search subject, from…"
-            className="w-full rounded-md border border-zinc-200 bg-white px-8 py-1.5 text-sm placeholder:text-zinc-400 focus:border-blue-500 focus:outline-none focus:ring-1 focus:ring-blue-500 dark:border-zinc-700 dark:bg-zinc-900 dark:placeholder:text-zinc-500"
+            className="w-full rounded-md border border-zinc-200 bg-white px-8 py-1.5 text-base placeholder:text-zinc-400 sm:text-sm focus:border-blue-500 focus:outline-none focus:ring-1 focus:ring-blue-500 dark:border-zinc-700 dark:bg-zinc-900 dark:placeholder:text-zinc-500"
           />
         </div>
         <Select
@@ -549,8 +549,8 @@ function ReceivingPane() {
         </Select>
       </div>
 
-      <div className="mt-4 overflow-hidden rounded-lg border border-zinc-200 dark:border-zinc-800">
-        <table className="w-full text-sm">
+      <div className="mt-4 overflow-x-auto rounded-lg border border-zinc-200 dark:border-zinc-800">
+        <table className="w-full min-w-[520px] text-sm">
           <thead className="bg-zinc-50 text-xs uppercase text-zinc-500 dark:bg-zinc-900/50">
             <tr>
               <th className="w-12 px-3 py-2"></th>
@@ -666,7 +666,7 @@ function MetricsPane() {
 
       {stats.data && (
         <div className="rounded-lg border border-zinc-200 bg-white p-4 dark:border-zinc-800 dark:bg-zinc-900">
-          <div className="mb-4 grid grid-cols-2 gap-6">
+          <div className="mb-4 grid grid-cols-2 gap-4 sm:gap-6">
             <div>
               <div className="text-[10px] font-medium uppercase tracking-wide text-zinc-500">
                 Emails
@@ -886,7 +886,7 @@ function DetailDrawer({ id, onClose }: { id: string; onClose: () => void }) {
                   {labelForStatus(m.display_status)}
                 </Badge>
               </div>
-              <div className="mt-3 grid grid-cols-2 gap-x-6 gap-y-1.5 text-xs">
+              <div className="mt-3 grid grid-cols-1 gap-x-6 gap-y-1.5 text-xs sm:grid-cols-2">
                 <Field label="ID" value={m.id} mono />
                 <Field label="From" value={m.from ?? "—"} />
                 <Field label="To" value={rcptList(m.to) || "—"} />

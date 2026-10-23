@@ -80,8 +80,8 @@ export function AppShell({ children }: { children: ReactNode }) {
   });
 
   return (
-    <div className="flex h-screen flex-col bg-zinc-50 text-zinc-900 dark:bg-zinc-950 dark:text-zinc-100">
-      <header className="flex shrink-0 items-center gap-1 border-b border-zinc-200 px-4 py-2 dark:border-zinc-800">
+    <div className="flex h-dvh flex-col bg-zinc-50 text-zinc-900 dark:bg-zinc-950 dark:text-zinc-100">
+      <header className="flex shrink-0 items-center gap-0.5 border-b border-zinc-200 px-2 py-2 dark:border-zinc-800 sm:gap-1 sm:px-4">
         {NAV.map((n) => {
           const Icon = n.icon;
           const active = path === n.to || path.startsWith(n.to + "/");
@@ -89,21 +89,23 @@ export function AppShell({ children }: { children: ReactNode }) {
             <Link
               key={n.to}
               to={n.to}
+              title={n.label}
+              aria-label={n.label}
               className={cn(
-                "inline-flex items-center gap-1.5 rounded-md px-2.5 py-1.5 text-sm font-medium transition-colors",
+                "inline-flex items-center gap-1.5 rounded-md px-2 py-1.5 text-sm font-medium transition-colors sm:px-2.5",
                 FOCUS_RING,
                 active
                   ? "bg-zinc-200 text-zinc-900 dark:bg-zinc-800 dark:text-zinc-100"
                   : "text-zinc-600 hover:bg-zinc-100 dark:text-zinc-400 dark:hover:bg-zinc-900",
               )}
             >
-              <Icon className="h-4 w-4" />
-              {n.label}
+              <Icon className="h-4 w-4 shrink-0" />
+              <span className="hidden md:inline">{n.label}</span>
             </Link>
           );
         })}
-        <div className="ml-auto flex items-center gap-2 text-xs text-zinc-500">
-          <span>{me.data?.email}</span>
+        <div className="ml-auto flex shrink-0 items-center gap-2 text-xs text-zinc-500">
+          <span className="hidden lg:inline">{me.data?.email}</span>
           <ThemeToggle />
           <button
             type="button"

@@ -36,16 +36,16 @@ export function SettingsScreen() {
 
   return (
     <div className="flex-1 overflow-y-auto">
-      <div className="mx-auto max-w-5xl px-6 py-6">
+      <div className="mx-auto max-w-5xl px-4 py-4 sm:px-6 sm:py-6">
         <h1 className="mb-4 text-lg font-medium">Settings</h1>
-        <div className="mb-6 flex border-b border-zinc-200 dark:border-zinc-800">
+        <div className="mb-6 flex overflow-x-auto border-b border-zinc-200 dark:border-zinc-800">
           {visible.map((t) => (
             <Link
               key={t.id}
               to="/settings/$tab"
               params={{ tab: t.id }}
               className={cn(
-                "border-b-2 px-4 py-2 text-sm font-medium transition-colors",
+                "shrink-0 whitespace-nowrap border-b-2 px-3 py-2 text-sm font-medium transition-colors sm:px-4",
                 tab === t.id
                   ? "border-blue-600 text-blue-700 dark:border-blue-500 dark:text-blue-300"
                   : "border-transparent text-zinc-500 hover:text-zinc-800 dark:hover:text-zinc-200",

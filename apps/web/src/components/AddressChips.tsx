@@ -111,7 +111,7 @@ export function AddressChips({ label, values, onChange, placeholder, autoFocus }
           onBlur={() => draft && commit(draft)}
           placeholder={values.length === 0 ? placeholder : ""}
           className={cn(
-            "min-w-[120px] flex-1 bg-transparent text-sm placeholder:text-zinc-400 focus:outline-none",
+            "min-w-[120px] flex-1 bg-transparent text-base placeholder:text-zinc-400 focus:outline-none sm:text-sm",
             invalidParts.length > 0 && "text-red-600 dark:text-red-400",
           )}
         />

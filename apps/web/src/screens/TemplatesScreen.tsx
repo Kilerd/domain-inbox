@@ -5,7 +5,7 @@ import { TemplatesTab } from "./settings/TemplatesTab";
 export function TemplatesScreen() {
   return (
     <div className="flex-1 overflow-y-auto">
-      <div className="mx-auto max-w-5xl px-6 py-6">
+      <div className="mx-auto max-w-5xl px-4 py-4 sm:px-6 sm:py-6">
         <h1 className="mb-4 text-lg font-medium">Templates</h1>
         <TemplatesTab />
       </div>

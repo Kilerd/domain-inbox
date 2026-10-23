@@ -206,11 +206,13 @@ function Toolbar({
   return (
     <div className="flex shrink-0 items-center gap-2 border-b border-zinc-200 px-3 py-2 dark:border-zinc-800">
       <Inbox className="h-3.5 w-3.5 text-zinc-500" />
-      <span className="text-sm font-medium">{viewLabel}</span>
-      <span className="text-xs text-zinc-500">{count}</span>
+      <span className="min-w-0 truncate text-sm font-medium">{viewLabel}</span>
+      <span className="shrink-0 text-xs text-zinc-500">{count}</span>
       {selectedIds.length > 0 && (
         <div className="ml-auto flex items-center gap-1">
-          <span className="text-xs text-zinc-500">{selectedIds.length} selected</span>
+          <span className="hidden text-xs text-zinc-500 sm:inline">
+            {selectedIds.length} selected
+          </span>
           <Button
             variant="ghost"
             onClick={() => mut.mutate({ read: true })}
@@ -285,9 +287,9 @@ function ThreadRow({
           }}
           onClick={(e) => e.stopPropagation()}
           className={cn(
-            "h-3 w-3 shrink-0 cursor-pointer rounded border-zinc-300 dark:border-zinc-600",
+            "h-3.5 w-3.5 shrink-0 cursor-pointer rounded border-zinc-300 dark:border-zinc-600 sm:h-3 sm:w-3",
             !selectedForBulk &&
-              "opacity-0 transition-opacity group-hover:opacity-100",
+              "opacity-100 transition-opacity [@media(hover:hover)]:opacity-0 [@media(hover:hover)]:group-hover:opacity-100",
           )}
         />
         {starred && (
@@ -299,7 +301,10 @@ function ThreadRow({
           className="block min-w-0 flex-1 text-left"
         >
           <div className="flex min-w-0 items-baseline gap-2">
-            <span className="min-w-0 flex-1 truncate text-sm font-medium">
+            <span
+              className="min-w-0 flex-1 truncate text-sm font-medium"
+              title={thread.participants.join(", ")}
+            >
               {thread.participants.slice(0, 2).join(", ") || "(no participants)"}
             </span>
             <span className="shrink-0 text-xs text-zinc-500">

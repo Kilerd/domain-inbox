@@ -2,6 +2,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { format } from "date-fns";
 import {
   Archive,
+  ArrowLeft,
   Eye,
   Forward,
   MousePointerClick,
@@ -68,13 +69,15 @@ function dedupeAddrs(arr: string[], ownEmails: Set<string>): string[] {
 
 interface Props {
   threadId: string;
+  /** Shown only in the single-pane mobile layout: return to the thread list. */
+  onBack?: () => void;
   /** Called after a header flags change (star/archive/spam/trash) succeeds,
    *  so the parent can react — e.g. deselect a thread that just left the
    *  current view. */
   onFlagsChanged?: (patch: ThreadFlagsPatch) => void;
 }
 
-export function ThreadDetail({ threadId, onFlagsChanged }: Props) {
+export function ThreadDetail({ threadId, onBack, onFlagsChanged }: Props) {
   const qc = useQueryClient();
   const q = useQuery({
     queryKey: ["thread", threadId],
@@ -107,14 +110,30 @@ export function ThreadDetail({ threadId, onFlagsChanged }: Props) {
 
   return (
     <div className="flex h-full flex-col">
-      <header className="flex items-start justify-between gap-3 border-b border-zinc-200 px-6 py-4 dark:border-zinc-800">
-        <div className="min-w-0 flex-1">
-          <h2 className="truncate text-lg font-semibold">
-            {q.data.thread.subject || "(no subject)"}
-          </h2>
-          <p className="mt-1 truncate text-xs text-zinc-500">
-            {q.data.thread.participants.join(", ")}
-          </p>
+      <header className="flex items-start justify-between gap-2 border-b border-zinc-200 px-4 py-3 dark:border-zinc-800 sm:gap-3 sm:px-6 sm:py-4">
+        <div className="flex min-w-0 flex-1 items-start gap-1">
+          {onBack && (
+            <button
+              type="button"
+              onClick={onBack}
+              className="-ml-1 mt-0.5 inline-flex shrink-0 items-center rounded-md p-1 text-zinc-600 hover:bg-zinc-100 dark:text-zinc-400 dark:hover:bg-zinc-800 md:hidden"
+              aria-label="Back to thread list"
+              title="Back"
+            >
+              <ArrowLeft className="h-4 w-4" />
+            </button>
+          )}
+          <div className="min-w-0 flex-1">
+            <h2 className="truncate text-base font-semibold sm:text-lg">
+              {q.data.thread.subject || "(no subject)"}
+            </h2>
+            <p
+              className="mt-1 truncate text-xs text-zinc-500"
+              title={q.data.thread.participants.join(", ")}
+            >
+              {q.data.thread.participants.join(", ")}
+            </p>
+          </div>
         </div>
         <div className="flex shrink-0 items-center gap-1">
           <Button
@@ -151,7 +170,7 @@ export function ThreadDetail({ threadId, onFlagsChanged }: Props) {
           </Button>
         </div>
       </header>
-      <div className="flex-1 space-y-4 overflow-y-auto p-6">
+      <div className="flex-1 space-y-3 overflow-y-auto p-3 sm:space-y-4 sm:p-6">
         {q.data.messages.map((m, i) => (
           <MessageCard
             key={m.id}
@@ -388,6 +407,12 @@ function HtmlBody({ html }: { html: string }) {
         .root { word-break: break-word; overflow-wrap: anywhere; }
         .root img { max-width: 100%; height: auto; }
         .root a { color: #2563eb; }
+        /* Marketing mail often ships fixed-width (600px) tables; clamp them
+           on phones so they don't force the whole page to scroll sideways. */
+        @media (max-width: 640px) {
+          .root table { max-width: 100% !important; }
+          .root td, .root th { overflow-wrap: anywhere; }
+        }
         ${
           !showQuote
             ? `.root .gmail_quote_container,
@@ -480,7 +505,7 @@ function MessageCard({
       className={cn(
         // Deliberate "paper" surface: stays white in dark mode too, because
         // the email HTML it renders assumes a white background.
-        "rounded-lg border border-zinc-200 bg-white p-4 text-zinc-900 dark:border-zinc-700",
+        "rounded-lg border border-zinc-200 bg-white p-3 text-zinc-900 dark:border-zinc-700 sm:p-4",
         !message.is_read && "border-blue-200 dark:border-blue-700",
       )}
     >
@@ -551,7 +576,7 @@ function MessageCard({
                   ))}
                 </div>
               )}
-              <div className="mt-3 flex items-center gap-2 border-t border-zinc-100 pt-3">
+              <div className="mt-3 flex flex-wrap items-center gap-2 border-t border-zinc-100 pt-3">
                 <Button
                   variant="secondary"
                   className={PAPER_BUTTON.secondary}

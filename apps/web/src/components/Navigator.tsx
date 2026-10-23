@@ -34,7 +34,7 @@ const SYSTEM_VIEWS: SystemViewDef[] = [
   { view: "trash", label: "Trash", icon: <Trash2 className="h-4 w-4" /> },
 ];
 
-export function Navigator() {
+export function Navigator({ onNavigate }: { onNavigate?: () => void }) {
   const { state, setView, selectAlias } = useInboxView();
   const domains = useQuery({ queryKey: ["inbox", "domains"], queryFn: api.listInboxDomains });
   const aliases = useQuery({
@@ -47,7 +47,7 @@ export function Navigator() {
   return (
     <nav className="flex h-full flex-col overflow-y-auto py-3 text-sm">
       <div className="px-2">
-        <DomainSwitcher />
+        <DomainSwitcher onNavigate={onNavigate} />
       </div>
 
       <section className="mt-3 px-1">
@@ -66,9 +66,12 @@ export function Navigator() {
             <button
               key={s.view}
               type="button"
-              onClick={() => setView(s.view)}
+              onClick={() => {
+                setView(s.view);
+                onNavigate?.();
+              }}
               className={cn(
-                "flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left",
+                "flex w-full items-center gap-2 rounded-md px-2 py-2 text-left lg:py-1.5",
                 FOCUS_RING,
                 isActive
                   ? "bg-zinc-200 font-medium text-zinc-900 dark:bg-zinc-800 dark:text-zinc-100"
@@ -103,7 +106,10 @@ export function Navigator() {
               key={a.id}
               alias={a}
               active={state.aliasId === a.id}
-              onSelect={() => selectAlias(a.id)}
+              onSelect={() => {
+                selectAlias(a.id);
+                onNavigate?.();
+              }}
             />
           ))}
         </section>
@@ -120,7 +126,7 @@ function SectionLabel({ children }: { children: React.ReactNode }) {
   );
 }
 
-function DomainSwitcher() {
+function DomainSwitcher({ onNavigate }: { onNavigate?: () => void }) {
   const { state, selectDomain } = useInboxView();
   const domains = useQuery({ queryKey: ["inbox", "domains"], queryFn: api.listInboxDomains });
   const [open, setOpen] = useState(false);
@@ -187,6 +193,7 @@ function DomainSwitcher() {
             onClick={() => {
               selectDomain(null);
               setOpen(false);
+              onNavigate?.();
             }}
           />
           <div className="border-t border-zinc-100 dark:border-zinc-800" />
@@ -201,6 +208,7 @@ function DomainSwitcher() {
               onClick={() => {
                 selectDomain(d.id);
                 setOpen(false);
+                onNavigate?.();
               }}
             />
           ))}
@@ -266,7 +274,7 @@ function AliasRow({
       type="button"
       onClick={onSelect}
       className={cn(
-        "flex w-full items-center gap-2 rounded-md px-2 py-1 text-left text-xs",
+        "flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left text-xs lg:py-1",
         FOCUS_RING,
         active
           ? "bg-zinc-200 text-zinc-900 dark:bg-zinc-800 dark:text-zinc-100"

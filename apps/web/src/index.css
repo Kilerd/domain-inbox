@@ -1,3 +1,16 @@
 @tailwind base;
 @tailwind components;
 @tailwind utilities;
+
+@layer base {
+  html {
+    /* Stop iOS from inflating text in landscape. */
+    -webkit-text-size-adjust: 100%;
+  }
+
+  body {
+    /* The mobile folder drawer lives off-canvas; never let it create a
+       horizontal scrollbar. */
+    overflow-x: hidden;
+  }
+}
