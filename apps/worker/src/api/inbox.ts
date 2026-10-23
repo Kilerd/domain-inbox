@@ -412,6 +412,9 @@ async function listThreads(url: URL, env: Env, user: AuthUser): Promise<Response
 // ── Navigator stats ───────────────────────────────────────────────────────
 
 async function listInboxDomains(env: Env, user: AuthUser): Promise<Response> {
+  // Must mirror viewClause("inbox"): archived threads don't appear in the
+  // Inbox, so an unread message inside an archived thread must not keep the
+  // Inbox badge lit. (Archiving a conversation doesn't mark it read.)
   const res = await env.DB
     .prepare(
       `SELECT d.id, d.domain,
@@ -426,7 +429,7 @@ async function listInboxDomains(env: Env, user: AuthUser): Promise<Response> {
        WHERE d.owner_id = ?1
        ORDER BY d.created_at DESC`,
     )
-    .bind(user.id, FLAG_TRASH | FLAG_SPAM)
+    .bind(user.id, FLAG_ARCHIVED | FLAG_TRASH | FLAG_SPAM)
     .all<{ id: string; domain: string; unread_count: number; thread_count: number }>();
   return Response.json({
     object: "list",
