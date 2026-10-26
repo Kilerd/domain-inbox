@@ -17,6 +17,7 @@ import { useEffect, useRef, useState } from "react";
 import {
   api,
   type ActivityEvent,
+  type Domain,
   type Message,
   type ThreadDetail as TThreadDetail,
   type ThreadFlagsPatch,
@@ -196,56 +197,53 @@ function useReplyHandlers(
   const { openCompose } = useCompose();
   const qc = useQueryClient();
   const meQ = useQuery({ queryKey: ["me"], queryFn: api.me });
-  const domainsQ = useQuery({ queryKey: ["domains"], queryFn: api.listDomains });
   const suggestionsQ = useQuery({
     queryKey: ["compose", "from-suggestions"],
     queryFn: api.fromSuggestions,
     staleTime: 60_000,
   });
 
-  function pickOwnFromAddress(): string {
-    const myDomains = (domainsQ.data ?? []).map((d) => d.name.toLowerCase());
+  /**
+   * The identity the sender actually reached. The recipient fields of the
+   * message being replied to are authoritative; if none of them is ours, fall
+   * back to the earliest inbound message in the thread, then to the From of a
+   * message we sent. Returns the exact address *and* its domain — the domain
+   * is what locks the compose From picker for replies.
+   *
+   * Deliberately not using recipient data from outbound messages to infer a
+   * different domain: a reply belongs to the mailbox that received it.
+   */
+  function pickOwnIdentity(
+    domains: Domain[],
+  ): { address: string; domain: string } | null {
+    const myDomains = new Set(domains.map((d) => d.name.toLowerCase()));
 
-    function ownOf(addrs: string[]): string | null {
+    function ownOf(addrs: string[]): { address: string; domain: string } | null {
       for (const a of addrs) {
         const lower = a.toLowerCase();
-        const dom = lower.split("@")[1];
-        if (dom && myDomains.includes(dom)) return lower;
+        const domain = lower.slice(lower.lastIndexOf("@") + 1);
+        if (domain && myDomains.has(domain)) return { address: lower, domain };
       }
       return null;
     }
 
-    // Preference order:
-    //   1. The recipient address on THIS message that belongs to one of our
-    //      verified domains (preserves identity for direct replies).
-    //   2. The recipient address on the earliest inbound message in this
-    //      thread that belongs to our domains — this is the "they reached us
-    //      at" identity, so every reply in the thread stays consistent.
-    //   3. If this message is one we sent ourselves, the From we used then.
-    //   4. The most-recent outbound From across all our mail.
-    //   5. hello@<first verified domain> as a sensible default.
-
+    // 1. The recipient address on THIS message (support@domain → reply as it).
     const direct = ownOf([...message.to, ...message.cc]);
     if (direct) return direct;
 
-    // Walk the thread inbound messages in chronological order to find the
-    // canonical recipient identity.
-    const inboundInThread = thread.messages.filter(
-      (m) => m.direction === "inbound",
-    );
-    for (const m of inboundInThread) {
+    // 2. The address the thread was originally sent to, so every reply keeps
+    //    the same identity even in longer conversations.
+    for (const m of thread.messages) {
+      if (m.direction !== "inbound") continue;
       const candidate = ownOf([...m.to, ...m.cc]);
       if (candidate) return candidate;
     }
 
+    // 3. Replying to something we sent ourselves: keep that From.
     if (message.direction === "outbound" && message.from?.address) {
-      return message.from.address.toLowerCase();
+      return ownOf([message.from.address]);
     }
-
-    const recent = suggestionsQ.data?.data[0]?.address;
-    if (recent) return recent.toLowerCase();
-    const first = domainsQ.data?.find((d) => d.status === "verified")?.name;
-    return first ? `hello@${first}` : "";
+    return null;
   }
 
   /**
@@ -269,9 +267,28 @@ function useReplyHandlers(
     return "";
   }
 
-  function buildPrefill(mode: ComposePrefill["mode"], originalText: string): ComposePrefill {
+  function buildPrefill(
+    mode: ComposePrefill["mode"],
+    originalText: string,
+    domains: Domain[],
+  ): ComposePrefill {
     const myEmail = meQ.data?.email?.toLowerCase() ?? "";
-    const fromAddr = pickOwnFromAddress();
+    const identity = pickOwnIdentity(domains);
+    const fromAddr =
+      identity?.address ??
+      (() => {
+        // Couldn't tie this message to one of our addresses (e.g. a thread
+        // with no inbound recipient metadata). Fall back to the previous
+        // account-level default; there is no domain to lock in this case.
+        const recent = suggestionsQ.data?.data[0]?.address;
+        if (recent) return recent.toLowerCase();
+        const first = domains.find((d) => d.status === "verified")?.name;
+        return first ? `hello@${first}` : "";
+      })();
+    // Only replies get locked to the receiving domain. Forwards and new
+    // messages keep the full domain picker.
+    const fromDomain =
+      mode === "reply" || mode === "reply-all" ? identity?.domain : undefined;
     const ownEmails = new Set<string>([myEmail, fromAddr].filter(Boolean));
 
     const replyTarget = message.reply_to ?? message.from?.address ?? "";
@@ -296,6 +313,7 @@ function useReplyHandlers(
       return {
         mode: "reply",
         from: fromAddr,
+        fromDomain,
         to: replyTarget ? [replyTarget.toLowerCase()] : [],
         subject: normalizeSubjectPrefix(baseSubject, "Re:"),
         text: quotedOriginal,
@@ -319,6 +337,7 @@ function useReplyHandlers(
       return {
         mode: "reply-all",
         from: fromAddr,
+        fromDomain,
         to,
         cc: cc.length ? cc : undefined,
         subject: normalizeSubjectPrefix(baseSubject, "Re:"),
@@ -358,8 +377,17 @@ function useReplyHandlers(
   }
 
   async function openWith(mode: ComposePrefill["mode"]): Promise<void> {
-    const originalText = await fetchOriginalText();
-    openCompose(buildPrefill(mode, originalText));
+    // Resolve the domain list before building the prefill. Otherwise a fast
+    // click on Reply can race the ["domains"] query and pick the wrong From.
+    const [originalText, domains] = await Promise.all([
+      fetchOriginalText(),
+      qc.ensureQueryData({
+        queryKey: ["domains"],
+        queryFn: api.listDomains,
+        staleTime: 60_000,
+      }),
+    ]);
+    openCompose(buildPrefill(mode, originalText, domains));
   }
 
   return {

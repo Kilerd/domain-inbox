@@ -5,6 +5,11 @@ export type ComposeMode = "new" | "reply" | "reply-all" | "forward" | "test";
 export interface ComposePrefill {
   mode: ComposeMode;
   from?: string;
+  // For replies: the domain that received the original message. The From
+  // picker is locked to this domain so a reply keeps the identity the sender
+  // reached (support@example.com replies from example.com, not another
+  // domain on the same account).
+  fromDomain?: string;
   to?: string[];
   cc?: string[];
   bcc?: string[];

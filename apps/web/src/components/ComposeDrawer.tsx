@@ -35,6 +35,11 @@ interface DraftState {
   attachments: ComposeAttachment[];
 }
 
+function domainOf(address: string): string {
+  const at = address.lastIndexOf("@");
+  return at >= 0 ? address.slice(at + 1).trim().toLowerCase() : "";
+}
+
 function emptyDraft(prefill: ComposePrefill | null): DraftState {
   return {
     from: prefill?.from ?? "",
@@ -168,6 +173,8 @@ export function ComposeDrawer() {
   const me = useQuery({ queryKey: ["me"], queryFn: api.me });
 
   const dkey = draftKey(prefill);
+  // Replies are tied to the domain that received the original message.
+  const replyDomain = prefill?.fromDomain?.toLowerCase() ?? null;
 
   // Reset draft state when a new prefill arrives — pull from localStorage if
   // we have a saved work-in-progress for this exact compose key, else start
@@ -175,13 +182,24 @@ export function ComposeDrawer() {
   useEffect(() => {
     if (!open) return;
     const saved = loadDraft(dkey);
-    const next = saved ? saved.state : emptyDraft(prefill);
+    let next = saved ? saved.state : emptyDraft(prefill);
+    // A reply draft saved before the From was locked — or one where the user
+    // picked another domain — would keep breaking the identity rule. Re-seed
+    // its From from the message being replied to.
+    if (
+      saved &&
+      prefill?.fromDomain &&
+      saved.state.from &&
+      domainOf(saved.state.from) !== prefill.fromDomain.toLowerCase()
+    ) {
+      next = { ...saved.state, from: prefill.from ?? "" };
+    }
     if (saved) {
-      setDraft(saved.state);
-      setShowCcBcc(saved.state.cc.length > 0 || saved.state.bcc.length > 0);
+      setDraft(next);
+      setShowCcBcc(next.cc.length > 0 || next.bcc.length > 0);
       setMissingAttachments(saved.missingAttachments);
     } else {
-      setDraft(emptyDraft(prefill));
+      setDraft(next);
       setShowCcBcc(Boolean((prefill?.cc?.length ?? 0) + (prefill?.bcc?.length ?? 0)));
       setMissingAttachments([]);
     }
@@ -200,17 +218,24 @@ export function ComposeDrawer() {
     persistDraft(dkey, draft);
   }, [open, dkey, draft]);
 
-  // Pick a default From when none was prefilled.
+  // Pick a default From when none was prefilled. Replies only consider
+  // addresses on the receiving domain.
   useEffect(() => {
     if (!open || draft.from) return;
-    const recent = suggestions.data?.data[0]?.address;
-    const firstVerified = domainsQ.data?.find((d) => d.status === "verified")?.name;
+    const candidates = (suggestions.data?.data ?? []).map((s) => s.address);
+    const recent = replyDomain
+      ? candidates.find((a) => domainOf(a) === replyDomain)
+      : candidates[0];
+    const domain =
+      replyDomain ??
+      domainsQ.data?.find((d) => d.status === "verified")?.name ??
+      null;
     if (recent) {
       setDraft((d) => ({ ...d, from: recent }));
-    } else if (firstVerified) {
-      setDraft((d) => ({ ...d, from: `hello@${firstVerified}` }));
+    } else if (domain) {
+      setDraft((d) => ({ ...d, from: `hello@${domain}` }));
     }
-  }, [open, draft.from, suggestions.data, domainsQ.data]);
+  }, [open, draft.from, suggestions.data, domainsQ.data, replyDomain]);
 
   const sendMut = useMutation({
     mutationFn: async () => {
@@ -258,8 +283,13 @@ export function ComposeDrawer() {
 
   if (!open) return null;
 
+  const fromDomainMismatch =
+    Boolean(replyDomain) &&
+    draft.from.trim().length > 0 &&
+    domainOf(draft.from.trim()) !== replyDomain;
   const canSend =
     isValidFromAddress(draft.from.trim()) &&
+    !fromDomainMismatch &&
     draft.to.length > 0 &&
     !sendMut.isPending;
 
@@ -300,9 +330,14 @@ export function ComposeDrawer() {
             value={draft.from}
             onChange={(v) => setDraft((d) => ({ ...d, from: v }))}
             suggestions={(suggestions.data?.data ?? []).map((s) => s.address)}
-            domainNames={(domainsQ.data ?? [])
-              .filter((d) => d.status === "verified")
-              .map((d) => d.name)}
+            allowedDomain={replyDomain}
+            domainNames={
+              replyDomain
+                ? [replyDomain]
+                : (domainsQ.data ?? [])
+                    .filter((d) => d.status === "verified")
+                    .map((d) => d.name)
+            }
           />
 
           <div className="mt-3">
@@ -431,6 +466,12 @@ export function ComposeDrawer() {
                 : "`from` looks malformed (missing @)."}
             </p>
           )}
+          {fromDomainMismatch && (
+            <p className="mt-2 text-xs text-amber-600 dark:text-amber-400">
+              Replies must be sent from @{replyDomain} — this message was
+              received there. Pick an address on that domain.
+            </p>
+          )}
         </div>
 
         <footer className="flex shrink-0 items-center gap-2 border-t border-zinc-200 px-4 pt-3 pb-[calc(0.75rem_+_env(safe-area-inset-bottom))] dark:border-zinc-800 sm:pb-3">
@@ -486,28 +527,38 @@ function FromField({
   onChange,
   suggestions,
   domainNames,
+  allowedDomain,
 }: {
   value: string;
   onChange: (v: string) => void;
   suggestions: string[];
   domainNames: string[];
+  /** Set for replies: only addresses on this domain are offered. */
+  allowedDomain?: string | null;
 }) {
   const [editing, setEditing] = useState(false);
   const ref = useRef<HTMLDivElement>(null);
-  // Build a unique list of candidate options.
+  // Build a unique list of candidate options. The current value comes first
+  // so a prefilled reply identity is always visible even when it isn't in the
+  // recent-senders list.
   const seen = new Set<string>();
   const options: string[] = [];
-  for (const s of suggestions) {
-    if (!seen.has(s)) {
-      seen.add(s);
-      options.push(s);
+  function offer(addr: string) {
+    const key = addr.toLowerCase();
+    if (!seen.has(key)) {
+      seen.add(key);
+      options.push(addr);
     }
   }
-  // Also offer a "<local>@<domain>" template for each verified domain so the
-  // user can pick a fresh local-part on a catch-all-enabled domain.
-  for (const d of domainNames) {
-    const placeholder = `…@${d}`;
-    if (!options.some((o) => o.endsWith(`@${d}`))) options.push(placeholder);
+  if (value) offer(value);
+  for (const s of suggestions) {
+    if (allowedDomain && domainOf(s) !== allowedDomain) continue;
+    offer(s);
+  }
+  // Also offer a "<local>@<domain>" template so the user can pick a fresh
+  // local-part on a catch-all-enabled domain.
+  for (const d of allowedDomain ? [allowedDomain] : domainNames) {
+    if (!options.some((o) => o.endsWith(`@${d}`))) options.push(`…@${d}`);
   }
 
   useEffect(() => {
@@ -561,13 +612,22 @@ function FromField({
                 type="email"
                 value={value}
                 onChange={(e) => onChange(e.target.value)}
-                placeholder="local-part@verified-domain"
+                placeholder={
+                  allowedDomain
+                    ? `local-part@${allowedDomain}`
+                    : "local-part@verified-domain"
+                }
                 className="mt-1 block w-full rounded border border-zinc-200 bg-white px-2 py-1 font-mono text-base sm:text-sm placeholder:text-zinc-400 focus:border-blue-500 focus:outline-none focus:ring-1 focus:ring-blue-500 dark:border-zinc-700 dark:bg-zinc-900 dark:placeholder:text-zinc-500"
               />
             </div>
           </div>
         )}
       </div>
+      {allowedDomain && (
+        <p className="mt-1 text-[11px] text-zinc-500">
+          Reply keeps the address this message was sent to (@{allowedDomain}).
+        </p>
+      )}
     </label>
   );
 }
