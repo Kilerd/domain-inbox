@@ -550,7 +550,12 @@ function FromField({
       options.push(addr);
     }
   }
-  if (value) offer(value);
+  // Keep the current value visible as an option only while it belongs to the
+  // allowed domain. A cross-domain address still shows in the field (so the
+  // user sees what they typed) but must not be offered as a picker choice.
+  if (value && (!allowedDomain || domainOf(value) === allowedDomain)) {
+    offer(value);
+  }
   for (const s of suggestions) {
     if (allowedDomain && domainOf(s) !== allowedDomain) continue;
     offer(s);

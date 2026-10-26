@@ -27,6 +27,11 @@ import { FLAG_ARCHIVED, FLAG_SPAM, FLAG_STARRED, FLAG_TRASH, has } from "@/lib/f
 import { useCompose, type ComposePrefill } from "@/lib/compose-store";
 import { cn } from "@/lib/utils";
 
+function addressDomain(address: string): string {
+  const at = address.lastIndexOf("@");
+  return at >= 0 ? address.slice(at + 1).trim().toLowerCase() : "";
+}
+
 function normalizeSubjectPrefix(subject: string, prefix: "Re:" | "Fwd:"): string {
   let prev = "";
   let cur = (subject ?? "").trim();
@@ -274,21 +279,32 @@ function useReplyHandlers(
   ): ComposePrefill {
     const myEmail = meQ.data?.email?.toLowerCase() ?? "";
     const identity = pickOwnIdentity(domains);
-    const fromAddr =
-      identity?.address ??
-      (() => {
-        // Couldn't tie this message to one of our addresses (e.g. a thread
-        // with no inbound recipient metadata). Fall back to the previous
-        // account-level default; there is no domain to lock in this case.
-        const recent = suggestionsQ.data?.data[0]?.address;
-        if (recent) return recent.toLowerCase();
-        const first = domains.find((d) => d.status === "verified")?.name;
-        return first ? `hello@${first}` : "";
-      })();
-    // Only replies get locked to the receiving domain. Forwards and new
-    // messages keep the full domain picker.
+    // Replies stay locked to the receiving domain even when the message's
+    // recipient headers are missing or unparseable: the thread's own domain
+    // is still a much better identity than "most recent sender anywhere".
+    // Forwards and new messages keep the full domain picker.
+    const threadDomain =
+      domains.find((d) => d.id === thread.thread.domain_id)?.name.toLowerCase() ??
+      null;
     const fromDomain =
-      mode === "reply" || mode === "reply-all" ? identity?.domain : undefined;
+      mode === "reply" || mode === "reply-all"
+        ? identity?.domain ?? threadDomain ?? undefined
+        : undefined;
+
+    let fromAddr = identity?.address;
+    if (!fromAddr && fromDomain) {
+      // No exact recipient address available — offer the most recent sender
+      // on the same domain, or hello@<domain> as a last resort.
+      const sameDomain = suggestionsQ.data?.data.find(
+        (s) => addressDomain(s.address) === fromDomain,
+      )?.address;
+      fromAddr = sameDomain ?? `hello@${fromDomain}`;
+    }
+    if (!fromAddr) {
+      const recent = suggestionsQ.data?.data[0]?.address;
+      const first = domains.find((d) => d.status === "verified")?.name;
+      fromAddr = recent?.toLowerCase() ?? (first ? `hello@${first}` : "");
+    }
     const ownEmails = new Set<string>([myEmail, fromAddr].filter(Boolean));
 
     const replyTarget = message.reply_to ?? message.from?.address ?? "";
