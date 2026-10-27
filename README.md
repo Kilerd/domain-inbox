@@ -62,6 +62,32 @@ Compatibility is end-to-end verified by `scripts/resend-compat-smoke.mjs`
 `scripts/webhook-signature-check.mjs` (cross-checks signatures with the
 official Svix SDK).
 
+### Receiving API
+
+Inbound mail is readable by programs with an `emails.read` key (the default
+key scopes include it). Domain-scoped keys only see their own domains:
+
+```bash
+TOKEN=re_live_xxx
+BASE=https://domain-inbox.<your-subdomain>.workers.dev
+
+# Newest first; filters: from, to, subject, created_after/before, cursor, limit
+curl -H "Authorization: Bearer $TOKEN" \
+  "$BASE/api/v1/emails/receiving?limit=20&subject=invoice"
+
+# Parsed text/html, headers and attachment metadata
+curl -H "Authorization: Bearer $TOKEN" "$BASE/api/v1/emails/receiving/<message_id>"
+# Original MIME
+curl -H "Authorization: Bearer $TOKEN" \
+  "$BASE/api/v1/emails/receiving/<message_id>/raw" -o message.eml
+# Attachment bytes
+curl -H "Authorization: Bearer $TOKEN" \
+  "$BASE/api/v1/emails/receiving/<message_id>/attachments/<attachment_id>" -o file.pdf
+```
+
+The `email.received` webhook payload carries `email_id`, `thread_id`, `from`,
+`to` and `subject`; pass the `email_id` to the detail endpoint.
+
 ### Open & click tracking
 
 Each sending domain has two defaults, `open_tracking` and `click_tracking`

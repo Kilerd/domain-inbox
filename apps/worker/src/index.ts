@@ -18,6 +18,7 @@ import {
 import { releaseExpiredIdempotencyKeys } from "./api/idempotency";
 import { handleImgProxy } from "./api/img_proxy";
 import { handleInbox } from "./api/inbox";
+import { handleReceiving } from "./api/receiving";
 import { handleSuppressions } from "./api/suppressions";
 import { handleTemplates } from "./api/templates";
 import { handleClickRedirect, handleOpenPixel } from "./api/tracking";
@@ -236,6 +237,17 @@ async function tryBearer(
       { id: k.auth.user_id, email: "", name: null, is_new: false },
       ctx,
     );
+  }
+
+  // Resend-compatible receiving API. Match before the generic
+  // `/api/v1/emails/:id` route so "receiving" is never treated as an id.
+  if (
+    url.pathname === "/api/v1/emails/receiving" ||
+    url.pathname.startsWith("/api/v1/emails/receiving/")
+  ) {
+    const k = await authenticateApiKey(req, env);
+    if (k.kind === "error") return k.response;
+    return handleReceiving(url, req, env, k.auth);
   }
 
   // All Resend-style endpoints are gated on the bearer-token auth path.

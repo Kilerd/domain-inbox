@@ -210,7 +210,7 @@ export async function handleInboundEmail(
     // One metadata read for the event, rules, vacation and alias counters.
     const meta = await env.DB
       .prepare(
-        `SELECT subject, rfc822_message_id, parse_status
+        `SELECT subject, rfc822_message_id, parse_status, thread_id
          FROM messages WHERE id = ?1`,
       )
       .bind(messageId)
@@ -218,6 +218,7 @@ export async function handleInboundEmail(
         subject: string | null;
         rfc822_message_id: string | null;
         parse_status: string;
+        thread_id: string | null;
       }>();
 
     if (meta?.parse_status === "parsed") {
@@ -233,6 +234,8 @@ export async function handleInboundEmail(
             owner.ownerId,
             messageId,
             JSON.stringify({
+              email_id: messageId,
+              thread_id: meta.thread_id,
               from: fromAddr,
               to: toAddr,
               subject: meta.subject,
@@ -242,7 +245,9 @@ export async function handleInboundEmail(
           .run();
         _ctx.waitUntil(
           fanoutEvent(env, owner.ownerId, "email.received", {
+            email_id: messageId,
             message_id: messageId,
+            thread_id: meta.thread_id,
             from: fromAddr,
             to: toAddr,
             subject: meta.subject,
