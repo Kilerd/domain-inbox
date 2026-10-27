@@ -1,11 +1,27 @@
 import { QueryClient, QueryClientProvider, useQuery } from "@tanstack/react-query";
 import { RouterProvider } from "@tanstack/react-router";
+import { lazy, Suspense } from "react";
 import { api, ApiError } from "@/api";
-import { ComposeDrawer } from "@/components/ComposeDrawer";
 import { Button } from "@/components/ui";
-import { ComposeProvider } from "@/lib/compose-store";
+import { ComposeProvider, useCompose } from "@/lib/compose-store";
 import { LoginScreen } from "@/screens/LoginScreen";
 import { router } from "@/routes";
+
+// The compose drawer is large (address chips, attachments, draft persistence)
+// and most sessions never open it. Load it the first time it is opened.
+const ComposeDrawer = lazy(() =>
+  import("@/components/ComposeDrawer").then((m) => ({ default: m.ComposeDrawer })),
+);
+
+function ComposeHost() {
+  const { open } = useCompose();
+  if (!open) return null;
+  return (
+    <Suspense fallback={null}>
+      <ComposeDrawer />
+    </Suspense>
+  );
+}
 
 const qc = new QueryClient({
   defaultOptions: {
@@ -26,7 +42,7 @@ export function App() {
     <QueryClientProvider client={qc}>
       <ComposeProvider>
         <AuthGate />
-        <ComposeDrawer />
+        <ComposeHost />
       </ComposeProvider>
     </QueryClientProvider>
   );

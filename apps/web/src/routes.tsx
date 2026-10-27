@@ -20,14 +20,21 @@ import {
   createRootRoute,
   createRoute,
   createRouter,
+  lazyRouteComponent,
   redirect,
 } from "@tanstack/react-router";
 import { AppShell } from "@/components/AppShell";
-import { ActivityScreen } from "@/screens/ActivityScreen";
-import { InboxScreen } from "@/screens/InboxScreen";
-import { SettingsScreen } from "@/screens/SettingsScreen";
-import { SuppressionsScreen } from "@/screens/SuppressionsScreen";
-import { TemplatesScreen } from "@/screens/TemplatesScreen";
+
+// Each screen is its own chunk. The shell (header, router, auth gate) stays in
+// the entry bundle; opening Activity/Settings/Templates does not parse the
+// inbox tree (or vice versa).
+function RoutePending() {
+  return (
+    <div className="flex flex-1 items-center justify-center p-6 text-sm text-zinc-500">
+      Loading…
+    </div>
+  );
+}
 
 const rootRoute = createRootRoute({
   // AppShell renders the header + Outlet; Outlet hosts the matched child route.
@@ -49,7 +56,10 @@ const indexRoute = createRoute({
 const inboxRoute = createRoute({
   getParentRoute: () => rootRoute,
   path: "/inbox",
-  component: InboxScreen,
+  component: lazyRouteComponent(
+    () => import("@/screens/InboxScreen"),
+    "InboxScreen",
+  ),
 });
 
 const activityIndexRoute = createRoute({
@@ -69,7 +79,10 @@ interface ActivitySearch {
 const activityTabRoute = createRoute({
   getParentRoute: () => rootRoute,
   path: "/activity/$tab",
-  component: () => <ActivityScreen />,
+  component: lazyRouteComponent(
+    () => import("@/screens/ActivityScreen"),
+    "ActivityScreen",
+  ),
   // `email` query param (selected outbound) survives refresh and is shareable.
   validateSearch: (raw: Record<string, unknown>): ActivitySearch => {
     const email = raw.email;
@@ -80,13 +93,19 @@ const activityTabRoute = createRoute({
 const templatesRoute = createRoute({
   getParentRoute: () => rootRoute,
   path: "/templates",
-  component: TemplatesScreen,
+  component: lazyRouteComponent(
+    () => import("@/screens/TemplatesScreen"),
+    "TemplatesScreen",
+  ),
 });
 
 const suppressionsRoute = createRoute({
   getParentRoute: () => rootRoute,
   path: "/suppressions",
-  component: SuppressionsScreen,
+  component: lazyRouteComponent(
+    () => import("@/screens/SuppressionsScreen"),
+    "SuppressionsScreen",
+  ),
 });
 
 const settingsIndexRoute = createRoute({
@@ -102,7 +121,10 @@ export type SettingsTab = "domains" | "api-keys" | "webhooks" | "members";
 const settingsTabRoute = createRoute({
   getParentRoute: () => rootRoute,
   path: "/settings/$tab",
-  component: () => <SettingsScreen />,
+  component: lazyRouteComponent(
+    () => import("@/screens/SettingsScreen"),
+    "SettingsScreen",
+  ),
 });
 
 const routeTree = rootRoute.addChildren([
@@ -119,6 +141,9 @@ const routeTree = rootRoute.addChildren([
 export const router = createRouter({
   routeTree,
   defaultPreload: "intent",
+  defaultPendingComponent: RoutePending,
+  defaultPendingMs: 100,
+  defaultPendingMinMs: 200,
 });
 
 declare module "@tanstack/react-router" {
