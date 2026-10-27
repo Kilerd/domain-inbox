@@ -589,50 +589,94 @@ interface FlagsBody {
   read?: unknown;
 }
 
-function applyFlagDelta(current: number, body: FlagsBody): number {
-  let out = current;
-  function set(bit: number, on: unknown) {
+// One bit-mask update per chunk instead of a query loop per thread. D1 caps
+// a statement at 100 bound parameters, so chunks leave room for owner/ids.
+const FLAG_BATCH_SIZE = 90;
+
+function flagMasks(body: FlagsBody): { set: number; keep: number } {
+  let setBits = 0;
+  let clearBits = 0;
+  const put = (bit: number, on: unknown) => {
     if (typeof on !== "boolean") return;
-    if (on) out |= bit;
-    else out &= ~bit;
-  }
-  set(FLAG_STARRED, body.star);
-  set(FLAG_ARCHIVED, body.archive);
-  set(FLAG_TRASH, body.trash);
-  set(FLAG_SPAM, body.spam);
-  return out;
+    if (on) setBits |= bit;
+    else clearBits |= bit;
+  };
+  put(FLAG_STARRED, body.star);
+  put(FLAG_ARCHIVED, body.archive);
+  put(FLAG_TRASH, body.trash);
+  put(FLAG_SPAM, body.spam);
+  return { set: setBits, keep: (~clearBits) >>> 0 };
 }
 
-async function applyThreadFlags(
+interface ThreadFlagResult {
+  updated: number;
+  missed: number;
+}
+
+async function applyThreadFlagsBatch(
   env: Env,
   user: AuthUser,
-  threadId: string,
+  ids: string[],
   body: FlagsBody,
-): Promise<boolean> {
-  const t = await env.DB
-    .prepare(`SELECT flags_bitmap FROM threads WHERE id = ?1 AND owner_id = ?2`)
-    .bind(threadId, user.id)
-    .first<{ flags_bitmap: number }>();
-  if (!t) return false;
-  const next = applyFlagDelta(t.flags_bitmap, body);
-  if (next !== t.flags_bitmap) {
-    await env.DB
-      .prepare(`UPDATE threads SET flags_bitmap = ?2 WHERE id = ?1`)
-      .bind(threadId, next)
-      .run();
+): Promise<ThreadFlagResult> {
+  const found = new Set<string>();
+  const { set, keep } = flagMasks(body);
+  const changeBits = set !== 0 || keep !== 0xffffffff;
+
+  for (let i = 0; i < ids.length; i += FLAG_BATCH_SIZE) {
+    const chunk = ids.slice(i, i + FLAG_BATCH_SIZE);
+    const ownerFirst = chunk.map((_, j) => `?${j + 2}`).join(",");
+
+    const chunkFound: string[] = [];
+    if (changeBits) {
+      // ?1 set, ?2 keep, ?3 owner, ?4.. ids
+      const idPh = chunk.map((_, j) => `?${j + 4}`).join(",");
+      const res = await env.DB
+        .prepare(
+          `UPDATE threads SET flags_bitmap = (flags_bitmap | ?1) & ?2
+           WHERE owner_id = ?3 AND id IN (${idPh})
+           RETURNING id`,
+        )
+        .bind(set, keep, user.id, ...chunk)
+        .all<{ id: string }>();
+      for (const row of res.results ?? []) chunkFound.push(row.id);
+    } else {
+      const res = await env.DB
+        .prepare(
+          `SELECT id FROM threads WHERE owner_id = ?1 AND id IN (${ownerFirst})`,
+        )
+        .bind(user.id, ...chunk)
+        .all<{ id: string }>();
+      for (const row of res.results ?? []) chunkFound.push(row.id);
+    }
+    for (const id of chunkFound) found.add(id);
+
+    if (body.read === true && chunkFound.length > 0) {
+      await env.DB
+        .prepare(
+          `UPDATE messages SET flags_bitmap = flags_bitmap | ${FLAG_READ}
+           WHERE owner_id = ?1 AND thread_id IN (${ownerFirst})
+             AND (flags_bitmap & ${FLAG_READ}) = 0`,
+        )
+        .bind(user.id, ...chunk)
+        .run();
+      await env.DB
+        .prepare(
+          `UPDATE threads SET unread_count = (
+             SELECT COUNT(*) FROM messages m
+             WHERE m.thread_id = threads.id
+               AND m.parse_status != 'duplicate'
+               AND (m.flags_bitmap & ${FLAG_READ}) = 0
+           )
+           WHERE owner_id = ?1 AND id IN (${ownerFirst})`,
+        )
+        .bind(user.id, ...chunk)
+        .run();
+    }
   }
-  // `read: true` is a shortcut to mark every message in the thread as read.
-  if (body.read === true) {
-    await env.DB
-      .prepare(
-        `UPDATE messages SET flags_bitmap = flags_bitmap | ${FLAG_READ}
-         WHERE thread_id = ?1 AND owner_id = ?2 AND (flags_bitmap & ${FLAG_READ}) = 0`,
-      )
-      .bind(threadId, user.id)
-      .run();
-    await recountThread(env, threadId);
-  }
-  return true;
+
+  const updated = ids.filter((id) => found.has(id)).length;
+  return { updated, missed: ids.length - updated };
 }
 
 async function threadFlags(
@@ -647,8 +691,8 @@ async function threadFlags(
   } catch {
     return httpError.badRequest("request body must be JSON");
   }
-  const ok = await applyThreadFlags(env, user, threadId, body);
-  if (!ok) return httpError.notFound(`thread ${threadId} not found`);
+  const { updated } = await applyThreadFlagsBatch(env, user, [threadId], body);
+  if (updated === 0) return httpError.notFound(`thread ${threadId} not found`);
   return Response.json({ object: "thread", id: threadId, updated: true });
 }
 
@@ -662,20 +706,11 @@ async function batchFlags(req: Request, env: Env, user: AuthUser): Promise<Respo
   if (!Array.isArray(body.ids) || body.ids.length === 0) {
     return httpError.validation("ids must be a non-empty array");
   }
-  // applyThreadFlags issues up to ~5 D1 queries per thread; the Workers
-  // subrequest budget is 1000, so 500 ids would die mid-loop with flags
-  // half-applied. 100 ids ≈ ≤500 subrequests, comfortably inside the cap.
   if (body.ids.length > 100) {
     return httpError.validation("ids cannot exceed 100 per call");
   }
-  let updated = 0;
-  let missed = 0;
-  for (const raw of body.ids) {
-    if (typeof raw !== "string") continue;
-    const ok = await applyThreadFlags(env, user, raw, body);
-    if (ok) updated += 1;
-    else missed += 1;
-  }
+  const ids = body.ids.filter((raw): raw is string => typeof raw === "string");
+  const { updated, missed } = await applyThreadFlagsBatch(env, user, ids, body);
   return Response.json({ object: "list", updated, missed });
 }
 

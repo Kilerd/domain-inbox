@@ -130,6 +130,11 @@ and still require a browser session. Keys with a non-empty `domain_scope` are
 rejected for inbox reads — a service token is deliberately account-wide.
 Revoke it like any other key; cached auth entries expire within 5 minutes.
 
+Default keys (including the sending keys the SPA creates) also carry
+`domains.read`: `GET /api/v1/domains` and `/api/v1/domains/:id` accept the same
+bearer token for DNS/verification metadata. Create, verify and delete still
+require a browser session, and a scoped key cannot use the bearer form.
+
 ## Deploy
 
 The active deployment is `domain-inbox-dev`. Both the default deploy command

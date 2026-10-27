@@ -192,9 +192,9 @@ export async function handleEmailSend(
     await env.DB
       .prepare(
         `INSERT INTO outbound_messages
-           (id, owner_id, api_key_id, idempotency_key, idempotency_hash, status, channel,
+           (id, owner_id, api_key_id, idempotency_key, idempotency_hash, status,
             request_json, attempts, template_id, tracking_enabled, scheduled_at, created_at)
-         VALUES (?1, ?2, ?3, ?4, ?11, ?9, 'cf_native', ?5, 0, ?6, ?7, ?10, ?8)`,
+         VALUES (?1, ?2, ?3, ?4, ?11, ?9, ?5, 0, ?6, ?7, ?10, ?8)`,
       )
       .bind(
         outboundId,

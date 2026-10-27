@@ -200,6 +200,39 @@ async function tryBearer(
     );
   }
 
+  // Domain metadata is readable with a `domains.read` key (the default scope
+  // set includes it). Only GET is exposed; POST/DELETE/verify stay on the
+  // browser session. As above, a cookie-only SPA request must fall through.
+  if (
+    (url.pathname === "/api/v1/domains" || url.pathname.startsWith("/api/v1/domains/"))
+  ) {
+    const authorization = req.headers.get("Authorization") ?? "";
+    if (!authorization.startsWith("Bearer ")) return null;
+
+    const k = await authenticateApiKey(req, env);
+    if (k.kind === "error") return k.response;
+    if (req.method !== "GET") {
+      return httpError.forbidden(
+        "API keys are read-only for domains; use a browser session to modify them",
+      );
+    }
+    if (!k.auth.scopes.includes("domains.read")) {
+      return httpError.forbidden("API key is missing the domains.read scope");
+    }
+    if (k.auth.domain_scope && k.auth.domain_scope.length > 0) {
+      return httpError.forbidden(
+        "domains.read requires an account-wide API key (domain_scope must be empty)",
+      );
+    }
+    return handleDomains(
+      url,
+      req,
+      env,
+      { id: k.auth.user_id, email: "", name: null, is_new: false },
+      ctx,
+    );
+  }
+
   // All Resend-style endpoints are gated on the bearer-token auth path.
   // Match the route first; only run auth when we're going to actually serve.
   if (url.pathname === "/api/v1/emails" && req.method === "POST") {

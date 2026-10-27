@@ -68,8 +68,11 @@ async function resolveOwner(env: Env, toDomain: string): Promise<OwnerLookup | n
   }
 
   // Dev fallback: when no domain has been registered yet, route to the dev
-  // user so the ingest plumbing is exercisable end-to-end. Removed in prod.
-  if (env.DEV_USER_EMAIL) {
+  // user so the ingest plumbing is exercisable end-to-end. Gated on the same
+  // explicit secret as the /_test fixtures: the live deployment also runs
+  // with ENV=dev but has no DEV_USER_TOKEN, so an unregistered domain is
+  // rejected instead of being attributed to the dev user.
+  if (env.ENV === "dev" && env.DEV_USER_TOKEN && env.DEV_USER_EMAIL) {
     const u = await env.DB
       .prepare("SELECT id FROM users WHERE email = ?1 LIMIT 1")
       .bind(env.DEV_USER_EMAIL.toLowerCase())

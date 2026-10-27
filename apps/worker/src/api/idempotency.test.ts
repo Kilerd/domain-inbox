@@ -1,5 +1,4 @@
-import { readFileSync, readdirSync } from "node:fs";
-import type { DatabaseSync as DatabaseSyncType, SQLInputValue } from "node:sqlite";
+import type { DatabaseSync as DatabaseSyncType } from "node:sqlite";
 import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 
 vi.mock("cloudflare:email", () => ({
@@ -16,6 +15,7 @@ vi.mock("../webhooks/dispatch", () => ({ fanoutEvent: vi.fn(async () => {}) }));
 
 import type { Env } from "../env";
 import type { ApiKeyAuth } from "./apikey_auth";
+import { d1, openDb } from "../test/sqlite";
 import { handleEmailSend } from "./emails";
 import {
   IDEMPOTENCY_WINDOW_MS,
@@ -28,10 +28,6 @@ import {
   resolveReservationConflict,
 } from "./idempotency";
 
-// vite-node can't resolve the prefix-only `node:sqlite` builtin through a
-// static import, so fetch it from the runtime directly.
-const { DatabaseSync } = process.getBuiltinModule("node:sqlite");
-
 const HOUR = 60 * 60 * 1000;
 const T0 = Date.UTC(2026, 0, 1, 12, 0, 0);
 const USER = "u_1";
@@ -43,49 +39,6 @@ const BODY = {
   subject: "Order #1",
   text: "Thanks for your order.",
 };
-
-// Real SQLite with every migration applied, behind a minimal D1 facade, so
-// the UNIQUE reservation and the created_at comparisons run for real.
-function openDb(): DatabaseSyncType {
-  const db = new DatabaseSync(":memory:", { enableForeignKeyConstraints: false });
-  const dir = new URL("../../migrations/", import.meta.url);
-  for (const f of readdirSync(dir).filter((f) => f.endsWith(".sql")).sort()) {
-    db.exec(readFileSync(new URL(f, dir), "utf8"));
-  }
-  db.prepare(
-    `INSERT INTO domains (id, owner_id, domain, verification_status, created_at, open_tracking, click_tracking)
-     VALUES ('d_1', ?1, 'example.com', 'verified', 0, 0, 0)`,
-  ).run(USER);
-  return db;
-}
-
-function d1(db: DatabaseSyncType, beforeRun?: (sql: string) => void): D1Database {
-  return {
-    prepare(sql: string) {
-      let params: SQLInputValue[] = [];
-      const stmt = {
-        bind(...p: unknown[]) {
-          params = p as SQLInputValue[];
-          return stmt;
-        },
-        async first() {
-          const row = db.prepare(sql).get(...params);
-          return row ? { ...row } : null;
-        },
-        async all() {
-          const results = db.prepare(sql).all(...params).map((r) => ({ ...r }));
-          return { results, success: true, meta: {} };
-        },
-        async run() {
-          beforeRun?.(sql);
-          const r = db.prepare(sql).run(...params);
-          return { results: [], success: true, meta: { changes: Number(r.changes) } };
-        },
-      };
-      return stmt;
-    },
-  } as unknown as D1Database;
-}
 
 // KV fake that honours expirationTtl against the (faked) clock and rejects
 // TTLs below Cloudflare's 60 s minimum.
@@ -128,6 +81,10 @@ beforeEach(() => {
   vi.useFakeTimers({ toFake: ["Date"] });
   vi.setSystemTime(T0);
   db = openDb();
+  db.prepare(
+    `INSERT INTO domains (id, owner_id, domain, verification_status, created_at, open_tracking, click_tracking)
+     VALUES ('d_1', ?1, 'example.com', 'verified', 0, 0, 0)`,
+  ).run(USER);
   kv = fakeKv();
   emailSend = vi.fn(async () => {});
   env = makeEnv();
