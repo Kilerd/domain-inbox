@@ -32,6 +32,8 @@ export const httpError = {
   missingApiKey: (message = "API key is missing") =>
     errorResponse("missing_api_key", message, 401),
   forbidden: (message: string) => errorResponse("forbidden", message, 403),
+  rateLimit: (message = "Too many requests") =>
+    errorResponse("rate_limit_exceeded", message, 429),
   notFound: (message: string) => errorResponse("not_found", message, 404),
   conflict: (message: string) => errorResponse("validation_error", message, 409),
   // Resend: same Idempotency-Key reused with a different payload inside the

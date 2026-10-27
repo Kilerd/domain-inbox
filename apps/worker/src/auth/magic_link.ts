@@ -9,16 +9,24 @@ const RATE_LIMIT_WINDOW_S = 3600;
 const RATE_LIMIT_MAX = 5;
 
 export async function isAllowed(env: Env, email: string): Promise<boolean> {
+  const lower = email.trim().toLowerCase();
   const row = await env.DB
     .prepare(`SELECT email FROM auth_allowlist WHERE email = ?1`)
-    .bind(email.toLowerCase())
+    .bind(lower)
     .first<{ email: string }>();
   if (row) return true;
-  // Bootstrap: first ever login auto-promotes to owner.
+
+  // First boot: only the explicitly configured OWNER_EMAIL may claim the
+  // owner account. A public deployment with no OWNER_EMAIL (and no allowlist
+  // row) accepts nobody, instead of handing the instance to the first visitor
+  // who finds the login form. Existing installations already have an owner, so
+  // this branch does not apply to them.
   const userCount = await env.DB
     .prepare(`SELECT COUNT(*) AS n FROM users WHERE role = 'owner'`)
     .first<{ n: number }>();
-  return (userCount?.n ?? 0) === 0;
+  if ((userCount?.n ?? 0) > 0) return false;
+  const ownerEmail = env.OWNER_EMAIL?.trim().toLowerCase();
+  return Boolean(ownerEmail) && ownerEmail === lower;
 }
 
 export async function issueLoginToken(env: Env, emailRaw: string): Promise<string> {

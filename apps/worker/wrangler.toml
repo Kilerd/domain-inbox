@@ -37,6 +37,11 @@ APP_BASE_URL = "https://domain-inbox.kilerd.me"
 # Only active with the DEV_USER_TOKEN secret and a matching X-Dev-Auth header.
 DEV_USER_EMAIL = "dev@example.com"
 DEV_USER_NAME = "Dev User"
+# First boot: only this address may claim the owner account (or seed
+# auth_allowlist instead). Leave unset on an instance that already has an owner.
+# OWNER_EMAIL = "you@example.com"
+# Per-owner outbound cap per UTC day (default 1000).
+# SEND_DAILY_LIMIT = "1000"
 # Once Cloudflare Access is configured, uncomment these:
 # ACCESS_TEAM_DOMAIN = "<your-team>"
 # ACCESS_AUD = "<application-aud-tag>"
@@ -93,6 +98,12 @@ APP_BASE_URL = "https://domain-inbox.kilerd.me"
 # is *not* publicly known. Without it, dev deployment behaves like prod (requires login).
 DEV_USER_EMAIL = "dev@example.com"
 DEV_USER_NAME = "Dev User"
+
+# First boot: only this address may claim the owner account (or seed
+# auth_allowlist instead). Leave unset on an instance that already has an owner.
+# OWNER_EMAIL = "you@example.com"
+# Per-owner outbound cap per UTC day (default 1000).
+# SEND_DAILY_LIMIT = "1000"
 
 # Once Access is configured, uncomment these:
 # ACCESS_TEAM_DOMAIN = "<your-team>"

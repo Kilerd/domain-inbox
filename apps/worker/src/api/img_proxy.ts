@@ -1,5 +1,6 @@
 import type { Env } from "../env";
 import { httpError } from "../http";
+import { validatePublicHttpUrl } from "../utils/net";
 
 // Generic image proxy used by sanitized email HTML.
 //   GET /api/img-proxy?u=<url>  → streams the image with Referer stripped.
@@ -20,51 +21,8 @@ import { httpError } from "../http";
 const MAX_BYTES = 10 * 1024 * 1024;
 const MAX_REDIRECTS = 3;
 
-const BLOCKED_HOSTNAMES = new Set(["localhost", "metadata.google.internal"]);
-
-function isBlockedHost(hostname: string): boolean {
-  const host = hostname.toLowerCase().replace(/\.$/, "");
-  if (BLOCKED_HOSTNAMES.has(host)) return true;
-  if (host.endsWith(".localhost") || host.endsWith(".internal") || host.endsWith(".local")) {
-    return true;
-  }
-  // IPv6 literal (URL hostname keeps brackets).
-  if (host.startsWith("[")) {
-    const v6 = host.slice(1, -1);
-    return (
-      v6 === "::" ||
-      v6 === "::1" ||
-      v6.startsWith("fe80:") || // link-local
-      v6.startsWith("fc") ||    // unique-local fc00::/7
-      v6.startsWith("fd") ||
-      v6.startsWith("::ffff:")  // v4-mapped — treat conservatively
-    );
-  }
-  // IPv4 literal.
-  const m = host.match(/^(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})$/);
-  if (m) {
-    const [a, b] = [Number(m[1]), Number(m[2])];
-    if (a === 0 || a === 10 || a === 127) return true;
-    if (a === 169 && b === 254) return true; // link-local / cloud metadata
-    if (a === 172 && b >= 16 && b <= 31) return true;
-    if (a === 192 && b === 168) return true;
-    if (a === 100 && b >= 64 && b <= 127) return true; // CGNAT
-  }
-  return false;
-}
-
 function validateTarget(u: string): URL | null {
-  let target: URL;
-  try {
-    target = new URL(u);
-  } catch {
-    return null;
-  }
-  if (target.protocol !== "http:" && target.protocol !== "https:") return null;
-  if (target.port !== "") return null; // default ports only
-  if (target.username || target.password) return null;
-  if (isBlockedHost(target.hostname)) return null;
-  return target;
+  return validatePublicHttpUrl(u, { defaultPortOnly: true });
 }
 
 export async function handleImgProxy(url: URL, _env: Env): Promise<Response> {

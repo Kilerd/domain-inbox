@@ -9,6 +9,7 @@ import {
   type IdempotentReply,
   type IdempotentSend,
 } from "./idempotency";
+import { consumeSendQuota, sendDailyLimit } from "./quotas";
 import {
   getOutboundRow,
   listOutboundEvents,
@@ -169,6 +170,14 @@ export async function handleEmailSend(
     const outcome = await checkIdempotencyKey(env, key.user_id, idempotencyKey, requestHash, now);
     if (outcome.kind !== "proceed") return idempotencyResponse(outcome);
     idempotency = { key: idempotencyKey, hash: requestHash, createdAt: now };
+  }
+
+  // Abuse/cost guard: count every accepted send (including scheduled ones)
+  // against the owner's UTC-day budget. Replays returned above are free.
+  if (!(await consumeSendQuota(env, key.user_id, now))) {
+    return httpError.rateLimit(
+      `daily send limit reached (${sendDailyLimit(env)}/day, resets at 00:00 UTC)`,
+    );
   }
 
   const outboundId = newId.outbound();

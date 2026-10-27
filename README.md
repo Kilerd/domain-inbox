@@ -141,6 +141,11 @@ The active deployment is `domain-inbox-dev`. Both the default deploy command
 and `--env dev` target that Worker and its existing storage. The empty
 `domain-inbox` Worker and its separate storage have been retired.
 
+First boot is fail-closed: set `OWNER_EMAIL` (or seed an `auth_allowlist` row)
+before exposing a fresh deployment. The old “first login becomes owner” shortcut
+is gone. `SEND_DAILY_LIMIT` (default 1000) caps outbound per owner per UTC day;
+requests over the cap get `429 rate_limit_exceeded`.
+
 Deploying is a short `wrangler` session: create D1 / R2 / KV, fill the
 `<placeholder>` ids in `apps/worker/wrangler.toml`, build the SPA, apply
 migrations, deploy. Two steps Cloudflare can't automate: enable

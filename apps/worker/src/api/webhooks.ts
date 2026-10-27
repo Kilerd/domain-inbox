@@ -2,6 +2,7 @@ import type { AuthUser } from "../auth";
 import type { Env } from "../env";
 import { httpError } from "../http";
 import { newId } from "../ids";
+import { validatePublicHttpUrl } from "../utils/net";
 
 const SECRET_PREFIX = "whsec_";
 const SUPPORTED_EVENTS = new Set([
@@ -76,6 +77,34 @@ async function listEndpoints(env: Env, user: AuthUser): Promise<Response> {
   });
 }
 
+/** Validate a webhook URL so the fan-out can't be used as an SSRF pivot. */
+function publicWebhookUrl(raw: unknown): URL | Response {
+  if (typeof raw !== "string") {
+    return httpError.validation("url must be a http(s) URL");
+  }
+  const url = validatePublicHttpUrl(raw, { defaultPortOnly: false });
+  if (!url) {
+    return httpError.validation(
+      "url must be a public http(s) URL without credentials; loopback/private hosts are blocked",
+    );
+  }
+  return url;
+}
+
+function webhookEvents(raw: unknown): string[] | Response {
+  if (
+    !Array.isArray(raw) ||
+    raw.length === 0 ||
+    !raw.every((e) => typeof e === "string")
+  ) {
+    return httpError.validation("events must be a non-empty array of strings");
+  }
+  const events = raw as string[];
+  const bad = events.find((e) => !SUPPORTED_EVENTS.has(e));
+  if (bad) return httpError.validation(`unsupported event type: ${bad}`);
+  return events;
+}
+
 async function createEndpoint(req: Request, env: Env, user: AuthUser): Promise<Response> {
   let body: { url?: unknown; events?: unknown; enabled?: unknown };
   try {
@@ -83,36 +112,30 @@ async function createEndpoint(req: Request, env: Env, user: AuthUser): Promise<R
   } catch {
     return httpError.badRequest("request body must be JSON");
   }
-  if (typeof body.url !== "string" || !/^https?:\/\//i.test(body.url)) {
-    return httpError.validation("url must be a http(s) URL");
-  }
-  if (!Array.isArray(body.events) || body.events.length === 0) {
-    return httpError.validation("events must be a non-empty array");
-  }
-  const events = (body.events as string[]).filter((e) => typeof e === "string");
-  const bad = events.find((e) => !SUPPORTED_EVENTS.has(e));
-  if (bad) {
-    return httpError.validation(`unsupported event type: ${bad}`);
-  }
+  const url = publicWebhookUrl(body.url);
+  if (url instanceof Response) return url;
+  const events = webhookEvents(body.events);
+  if (events instanceof Response) return events;
 
   const id = newId.webhookEndpoint();
   const secret = newSecret();
   const now = Date.now();
   const enabled = body.enabled === false ? 0 : 1;
+  const normalized = url.toString();
 
   await env.DB
     .prepare(
       `INSERT INTO webhook_endpoints (id, owner_id, url, secret, event_types_json, enabled, created_at)
        VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)`,
     )
-    .bind(id, user.id, body.url, secret, JSON.stringify(events), enabled, now)
+    .bind(id, user.id, normalized, secret, JSON.stringify(events), enabled, now)
     .run();
 
   return Response.json(
     {
       object: "webhook_endpoint",
       id,
-      url: body.url,
+      url: normalized,
       events,
       enabled: Boolean(enabled),
       created_at: new Date(now).toISOString(),
@@ -150,10 +173,23 @@ async function patchEndpoint(req: Request, env: Env, user: AuthUser, id: string)
   } catch {
     return httpError.badRequest("request body must be JSON");
   }
-  const newUrl = typeof body.url === "string" ? body.url : row.url;
-  const newEvents = Array.isArray(body.events)
-    ? (body.events as string[]).filter((e) => typeof e === "string")
-    : (JSON.parse(row.event_types_json) as string[]);
+
+  let newUrl = row.url;
+  if (body.url !== undefined) {
+    const parsed = publicWebhookUrl(body.url);
+    if (parsed instanceof Response) return parsed;
+    newUrl = parsed.toString();
+  }
+
+  let newEvents: string[];
+  if (body.events !== undefined) {
+    const parsed = webhookEvents(body.events);
+    if (parsed instanceof Response) return parsed;
+    newEvents = parsed;
+  } else {
+    newEvents = JSON.parse(row.event_types_json) as string[];
+  }
+
   const newEnabled =
     typeof body.enabled === "boolean" ? (body.enabled ? 1 : 0) : row.enabled;
 
