@@ -37,12 +37,33 @@ const SYSTEM_VIEWS: SystemViewDef[] = [
 export function Navigator({ onNavigate }: { onNavigate?: () => void }) {
   const { state, setView, selectAlias } = useInboxView();
   const domains = useQuery({ queryKey: ["inbox", "domains"], queryFn: api.listInboxDomains });
+  // With no domain selected this returns every alias the owner has, which is
+  // what the "All domains" view needs: sub-mailboxes stay discoverable
+  // without first picking a domain.
   const aliases = useQuery({
     queryKey: ["inbox", "aliases", state.domainId ?? "(none)"],
     queryFn: () => api.listInboxAliases(state.domainId),
-    enabled: !!state.domainId,
     staleTime: 30_000,
   });
+  const domainById = new Map(
+    (domains.data?.data ?? []).map((d) => [d.id, d.domain]),
+  );
+  const aliasGroups = groupAliases(
+    aliases.data?.data ?? [],
+    (domains.data?.data ?? []).map((d) => d.id),
+    domainById,
+  );
+  const aliasRow = (a: InboxAlias) => (
+    <AliasRow
+      key={a.id}
+      alias={a}
+      active={state.aliasId === a.id}
+      onSelect={() => {
+        selectAlias(a.id);
+        onNavigate?.();
+      }}
+    />
+  );
 
   return (
     <nav className="flex h-full flex-col overflow-y-auto py-3 text-sm">
@@ -90,32 +111,55 @@ export function Navigator({ onNavigate }: { onNavigate?: () => void }) {
         })}
       </section>
 
-      {state.domainId && (
-        <section className="mt-4 px-1">
-          <SectionLabel>Aliases</SectionLabel>
-          {aliases.isLoading && (
-            <div className="px-2 py-1 text-xs text-zinc-500">Loading…</div>
-          )}
-          {aliases.data?.data.length === 0 && (
-            <div className="px-2 py-1 text-xs italic text-zinc-500">
-              No aliases yet.
-            </div>
-          )}
-          {aliases.data?.data.map((a) => (
-            <AliasRow
-              key={a.id}
-              alias={a}
-              active={state.aliasId === a.id}
-              onSelect={() => {
-                selectAlias(a.id);
-                onNavigate?.();
-              }}
-            />
-          ))}
-        </section>
-      )}
+      <section className="mt-4 px-1">
+        <SectionLabel>Aliases</SectionLabel>
+        {aliases.isLoading && (
+          <div className="px-2 py-1 text-xs text-zinc-500">Loading…</div>
+        )}
+        {aliases.data?.data.length === 0 && (
+          <div className="px-2 py-1 text-xs italic text-zinc-500">
+            No aliases yet.
+          </div>
+        )}
+        {state.domainId
+          ? aliases.data?.data.map(aliasRow)
+          : aliasGroups.map((g) => (
+              <div key={g.id} className="mt-2 first:mt-0">
+                <div className="px-2 pb-0.5 pt-1 text-[10px] font-medium uppercase tracking-wide text-zinc-400">
+                  {g.name}
+                </div>
+                {g.aliases.map(aliasRow)}
+              </div>
+            ))}
+      </section>
     </nav>
   );
+}
+
+/** Group aliases under their domain, preserving the domain picker's order. */
+function groupAliases(
+  aliases: InboxAlias[],
+  domainOrder: string[],
+  domainById: Map<string, string>,
+): Array<{ id: string; name: string; aliases: InboxAlias[] }> {
+  const groups = new Map<string, InboxAlias[]>();
+  for (const a of aliases) {
+    const list = groups.get(a.domain_id) ?? [];
+    list.push(a);
+    groups.set(a.domain_id, list);
+  }
+  const rank = new Map(domainOrder.map((id, i) => [id, i]));
+  return [...groups.entries()]
+    .sort(
+      ([a], [b]) =>
+        (rank.get(a) ?? Number.MAX_SAFE_INTEGER) -
+        (rank.get(b) ?? Number.MAX_SAFE_INTEGER),
+    )
+    .map(([id, list]) => ({
+      id,
+      name: domainById.get(id) ?? id,
+      aliases: list,
+    }));
 }
 
 function SectionLabel({ children }: { children: React.ReactNode }) {
