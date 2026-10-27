@@ -9,6 +9,12 @@ import {
   type IdempotentReply,
   type IdempotentSend,
 } from "./idempotency";
+import {
+  getOutboundRow,
+  listOutboundEvents,
+  listOutboundRows,
+  shapeOutbound,
+} from "./outbound";
 import { suppressionHits } from "./suppressions";
 import { getTemplateById, renderTemplate } from "./templates";
 import { rewriteHtmlForTracking } from "./tracking";
@@ -930,10 +936,8 @@ export async function patchOutboundMessage(
   });
 }
 
-// Resend-style listing: cursor pagination over outbound_messages with
-// optional filters. The cursor is the created_at of the last row from the
-// previous page (descending order); ties on created_at fall through to id
-// lexicographically so we don't skip or duplicate rows.
+// Resend-style listing. The query, cursor and row shape live in ./outbound
+// so the SPA's activity endpoints cannot drift from this one.
 export async function listOutboundMessages(
   url: URL,
   env: Env,
@@ -942,135 +946,13 @@ export async function listOutboundMessages(
   if (!key.scopes.includes("emails.read")) {
     return httpError.forbidden("API key lacks emails.read scope");
   }
-  const status = url.searchParams.get("status");
-  const domainFilter = url.searchParams.get("domain");
-  const apiKeyFilter = url.searchParams.get("api_key");
-  const createdAfter = url.searchParams.get("created_after");
-  const createdBefore = url.searchParams.get("created_before");
-  const cursor = url.searchParams.get("cursor");
-  const limitRaw = parseInt(url.searchParams.get("limit") ?? "50", 10);
-  const limit = Math.min(Math.max(Number.isFinite(limitRaw) ? limitRaw : 50, 1), 100);
-
-  const filters: string[] = ["om.owner_id = ?1"];
-  const binds: Array<string | number> = [key.user_id];
-
-  if (status) {
-    filters.push(`om.status = ?${binds.length + 1}`);
-    binds.push(status);
-  }
-  if (apiKeyFilter) {
-    filters.push(`om.api_key_id = ?${binds.length + 1}`);
-    binds.push(apiKeyFilter);
-  }
-  if (createdAfter) {
-    const ts = Date.parse(createdAfter);
-    if (Number.isNaN(ts)) return httpError.validation("created_after must be ISO8601");
-    filters.push(`om.created_at >= ?${binds.length + 1}`);
-    binds.push(ts);
-  }
-  if (createdBefore) {
-    const ts = Date.parse(createdBefore);
-    if (Number.isNaN(ts)) return httpError.validation("created_before must be ISO8601");
-    filters.push(`om.created_at < ?${binds.length + 1}`);
-    binds.push(ts);
-  }
-  if (cursor) {
-    // cursor = "<created_at>:<id>"
-    const [tsRaw, idRaw] = cursor.split(":");
-    const ts = parseInt(tsRaw ?? "", 10);
-    if (Number.isNaN(ts) || !idRaw) return httpError.validation("invalid cursor");
-    filters.push(
-      `(om.created_at < ?${binds.length + 1} OR (om.created_at = ?${binds.length + 1} AND om.id < ?${binds.length + 2}))`,
-    );
-    binds.push(ts, idRaw);
-  }
-
-  if (domainFilter) {
-    // Filter by the from-domain extracted from request_json. SQLite's json1
-    // extension is on by default in D1, so this is one indexable expression
-    // rather than a scan + LIKE pattern.
-    filters.push(
-      `json_extract(om.request_json, '$.from') LIKE ?${binds.length + 1}`,
-    );
-    binds.push(`%@${domainFilter}%`);
-  }
-
-  const sql = `
-    SELECT om.id, om.status, om.created_at, om.sent_at, om.scheduled_at, om.bounced_at,
-           om.bounce_type, om.bounce_diag, om.last_error,
-           om.template_id, om.tracking_enabled, om.open_count, om.click_count,
-           om.first_opened_at, om.last_opened_at, om.first_clicked_at, om.last_clicked_at,
-           om.api_key_id, om.idempotency_key, om.request_json
-    FROM outbound_messages om
-    WHERE ${filters.join(" AND ")}
-    ORDER BY om.created_at DESC, om.id DESC
-    LIMIT ${limit + 1}
-  `;
-  const res = await env.DB.prepare(sql).bind(...binds).all<{
-    id: string;
-    status: string;
-    created_at: number;
-    sent_at: number | null;
-    scheduled_at: number | null;
-    bounced_at: number | null;
-    bounce_type: string | null;
-    bounce_diag: string | null;
-    last_error: string | null;
-    template_id: string | null;
-    tracking_enabled: number;
-    open_count: number;
-    click_count: number;
-    first_opened_at: number | null;
-    last_opened_at: number | null;
-    first_clicked_at: number | null;
-    last_clicked_at: number | null;
-    api_key_id: string;
-    idempotency_key: string | null;
-    request_json: string;
-  }>();
-  const rows = res.results ?? [];
-  const hasMore = rows.length > limit;
-  const page = hasMore ? rows.slice(0, limit) : rows;
-  const next = hasMore && page.length
-    ? `${page[page.length - 1]!.created_at}:${page[page.length - 1]!.id}`
-    : null;
-
+  const page = await listOutboundRows(url, env, key.user_id);
+  if (page instanceof Response) return page;
   return Response.json({
     object: "list",
-    has_more: hasMore,
-    next_cursor: next,
-    data: page.map((r) => {
-      const req = JSON.parse(r.request_json) as Record<string, unknown>;
-      return {
-        object: "email",
-        id: r.id,
-        status: r.status,
-        created_at: new Date(r.created_at).toISOString(),
-        sent_at: r.sent_at ? new Date(r.sent_at).toISOString() : null,
-        scheduled_at: r.scheduled_at ? new Date(r.scheduled_at).toISOString() : null,
-        bounced_at: r.bounced_at ? new Date(r.bounced_at).toISOString() : null,
-        bounce_type: r.bounce_type,
-        bounce_diag: r.bounce_diag,
-        last_error: r.last_error,
-        from: req.from,
-        to: req.to,
-        cc: req.cc ?? null,
-        bcc: req.bcc ?? null,
-        subject: req.subject ?? null,
-        template_id: r.template_id,
-        api_key_id: r.api_key_id,
-        idempotency_key: r.idempotency_key,
-        tracking: {
-          enabled: Boolean(r.tracking_enabled),
-          open_count: r.open_count,
-          click_count: r.click_count,
-          first_opened_at: r.first_opened_at ? new Date(r.first_opened_at).toISOString() : null,
-          last_opened_at: r.last_opened_at ? new Date(r.last_opened_at).toISOString() : null,
-          first_clicked_at: r.first_clicked_at ? new Date(r.first_clicked_at).toISOString() : null,
-          last_clicked_at: r.last_clicked_at ? new Date(r.last_clicked_at).toISOString() : null,
-        },
-      };
-    }),
+    has_more: page.hasMore,
+    next_cursor: page.nextCursor,
+    data: page.rows.map((r) => shapeOutbound(r, "api")),
   });
 }
 
@@ -1082,31 +964,9 @@ export async function getOutboundMessageEvents(
   if (!key.scopes.includes("emails.read")) {
     return httpError.forbidden("API key lacks emails.read scope");
   }
-  const owns = await env.DB
-    .prepare(`SELECT id FROM outbound_messages WHERE id = ?1 AND owner_id = ?2`)
-    .bind(id, key.user_id)
-    .first<{ id: string }>();
-  if (!owns) return httpError.notFound(`email ${id} not found`);
-
-  const res = await env.DB
-    .prepare(
-      `SELECT id, type, payload_json, created_at
-       FROM events
-       WHERE owner_id = ?1 AND (outbound_id = ?2 OR email_id = ?2)
-       ORDER BY created_at ASC`,
-    )
-    .bind(key.user_id, id)
-    .all<{ id: string; type: string; payload_json: string; created_at: number }>();
-  return Response.json({
-    object: "list",
-    email_id: id,
-    data: (res.results ?? []).map((r) => ({
-      id: r.id,
-      type: r.type,
-      created_at: new Date(r.created_at).toISOString(),
-      data: JSON.parse(r.payload_json),
-    })),
-  });
+  const data = await listOutboundEvents(env, key.user_id, id);
+  if (!data) return httpError.notFound(`email ${id} not found`);
+  return Response.json({ object: "list", email_id: id, data });
 }
 
 export async function getOutboundMessage(
@@ -1117,38 +977,7 @@ export async function getOutboundMessage(
   if (!key.scopes.includes("emails.read")) {
     return httpError.forbidden("API key lacks emails.read scope");
   }
-  const row = await env.DB
-    .prepare(
-      `SELECT id, status, created_at, sent_at, scheduled_at, channel, last_error,
-              request_json
-       FROM outbound_messages WHERE id = ?1 AND owner_id = ?2`,
-    )
-    .bind(id, key.user_id)
-    .first<{
-      id: string;
-      status: string;
-      created_at: number;
-      sent_at: number | null;
-      scheduled_at: number | null;
-      channel: string;
-      last_error: string | null;
-      request_json: string;
-    }>();
+  const row = await getOutboundRow(env, key.user_id, id);
   if (!row) return httpError.notFound(`email ${id} not found`);
-
-  const req = JSON.parse(row.request_json) as Record<string, unknown>;
-  return Response.json({
-    object: "email",
-    id: row.id,
-    status: row.status,
-    created_at: new Date(row.created_at).toISOString(),
-    sent_at: row.sent_at ? new Date(row.sent_at).toISOString() : null,
-    scheduled_at: row.scheduled_at ? new Date(row.scheduled_at).toISOString() : null,
-    from: req.from,
-    to: req.to,
-    cc: req.cc,
-    bcc: req.bcc,
-    subject: req.subject,
-    last_error: row.last_error,
-  });
+  return Response.json(shapeOutbound(row, "api"));
 }

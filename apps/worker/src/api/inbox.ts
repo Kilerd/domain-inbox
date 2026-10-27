@@ -1,8 +1,24 @@
 import PostalMime from "postal-mime";
 import type { AuthUser } from "../auth";
 import type { Env } from "../env";
+import { recountThread } from "../email/counters";
 import { httpError } from "../http";
+import {
+  FLAG_ARCHIVED,
+  FLAG_AUXILIARY,
+  FLAG_READ,
+  FLAG_SPAM,
+  FLAG_STARRED,
+  FLAG_TRASH,
+} from "../utils/flags";
 import { handleEmailSend } from "./emails";
+import {
+  buildOutboundFilters,
+  getOutboundRow,
+  listOutboundEvents,
+  listOutboundRows,
+  shapeOutbound,
+} from "./outbound";
 import { sanitizeEmailHtml } from "./sanitize";
 
 interface ThreadRow {
@@ -290,12 +306,6 @@ async function openInboxStream(env: Env, user: AuthUser): Promise<Response> {
   });
 }
 
-// flags_bitmap bit positions (mirror migration 0003_inbox_v2)
-const FLAG_READ = 1;     // bit 0
-const FLAG_STARRED = 2;  // bit 1
-const FLAG_ARCHIVED = 4; // bit 2
-const FLAG_TRASH = 8;    // bit 3
-const FLAG_SPAM = 16;    // bit 4
 
 type View = "inbox" | "unread" | "starred" | "archived" | "trash" | "spam" | "sent" | "all";
 
@@ -467,7 +477,13 @@ async function listInboxAliases(url: URL, env: Env, user: AuthUser): Promise<Res
 
   let sql = `
     SELECT a.id, a.domain_id, a.full_address, a.local_part, a.type, a.label,
-           a.disabled, a.hidden, a.message_count, a.unread_count, a.last_message_at
+           a.disabled, a.hidden, a.message_count, a.last_message_at,
+           (SELECT COUNT(*) FROM messages m
+             WHERE m.alias_id = a.id
+               AND m.parse_status != 'duplicate'
+               AND m.direction = 'inbound'
+               AND (m.flags_bitmap & ${FLAG_AUXILIARY}) = 0
+               AND (m.flags_bitmap & ${FLAG_READ}) = 0) AS unread_count
     FROM aliases a JOIN domains d ON d.id = a.domain_id
     WHERE ${where.join(" AND ")}`;
 
@@ -609,33 +625,12 @@ async function applyThreadFlags(
   if (body.read === true) {
     await env.DB
       .prepare(
-        `UPDATE messages SET flags_bitmap = flags_bitmap | 1
-         WHERE thread_id = ?1 AND owner_id = ?2 AND (flags_bitmap & 1) = 0`,
+        `UPDATE messages SET flags_bitmap = flags_bitmap | ${FLAG_READ}
+         WHERE thread_id = ?1 AND owner_id = ?2 AND (flags_bitmap & ${FLAG_READ}) = 0`,
       )
       .bind(threadId, user.id)
       .run();
-    await env.DB
-      .prepare(`UPDATE threads SET unread_count = 0 WHERE id = ?1`)
-      .bind(threadId)
-      .run();
-    // Recompute aliases.unread_count for affected aliases (cheap; bounded by msg count).
-    await env.DB
-      .prepare(
-        `UPDATE aliases
-         SET unread_count = (
-           SELECT COUNT(*) FROM messages m
-           WHERE m.alias_id = aliases.id
-             AND m.parse_status != 'duplicate'
-             AND m.direction = 'inbound'
-             AND (m.flags_bitmap & 1) = 0
-         )
-         WHERE id IN (
-           SELECT DISTINCT alias_id FROM messages
-           WHERE thread_id = ?1 AND alias_id IS NOT NULL
-         )`,
-      )
-      .bind(threadId)
-      .run();
+    await recountThread(env, threadId);
   }
   return true;
 }
@@ -786,44 +781,26 @@ async function getMessageBody(env: Env, user: AuthUser, messageId: string): Prom
 }
 
 async function markRead(env: Env, user: AuthUser, messageId: string): Promise<Response> {
-  // Peek before update so we know whether this transition actually flips
-  // bit 0 (avoids double-decrementing alias.unread_count on re-mark-read).
+  // Recompute (rather than decrement) so a re-mark-read and a thread whose
+  // other messages changed can never leave the badge off by one.
   const before = await env.DB
     .prepare(
-      `SELECT thread_id, alias_id, flags_bitmap
+      `SELECT thread_id, flags_bitmap
        FROM messages WHERE id = ?1 AND owner_id = ?2`,
     )
     .bind(messageId, user.id)
-    .first<{ thread_id: string | null; alias_id: string | null; flags_bitmap: number }>();
+    .first<{ thread_id: string | null; flags_bitmap: number }>();
   if (!before) return httpError.notFound(`message ${messageId} not found`);
-  const wasUnread = (before.flags_bitmap & 1) === 0;
+  if ((before.flags_bitmap & FLAG_READ) !== 0) return Response.json({ ok: true });
 
   await env.DB
-    .prepare(`UPDATE messages SET flags_bitmap = flags_bitmap | 1 WHERE id = ?1`)
+    .prepare(
+      `UPDATE messages SET flags_bitmap = flags_bitmap | ${FLAG_READ} WHERE id = ?1`,
+    )
     .bind(messageId)
     .run();
 
-  if (wasUnread) {
-    if (before.thread_id) {
-      await env.DB
-        .prepare(
-          `UPDATE threads SET unread_count =
-             (SELECT COUNT(*) FROM messages
-              WHERE thread_id = ?1 AND parse_status != 'duplicate' AND (flags_bitmap & 1) = 0)
-           WHERE id = ?1`,
-        )
-        .bind(before.thread_id)
-        .run();
-    }
-    if (before.alias_id) {
-      await env.DB
-        .prepare(
-          `UPDATE aliases SET unread_count = MAX(0, unread_count - 1) WHERE id = ?1`,
-        )
-        .bind(before.alias_id)
-        .run();
-    }
-  }
+  if (before.thread_id) await recountThread(env, before.thread_id);
   return Response.json({ ok: true });
 }
 
@@ -852,190 +829,18 @@ async function getAttachment(env: Env, user: AuthUser, attachmentId: string): Pr
 
 // ── Outbound + activity (cookie-auth surface for the SPA) ─────────────────
 //
-// Mirror of /api/v1/emails (bearer) but driven by the session AuthUser. The
-// bearer endpoints are still the canonical Resend-compatible API; these are
-// duplicates rather than redirects so the SPA gets back exactly the shape it
-// wants without going through API-key issuance.
-
-interface OutboundListRow {
-  id: string;
-  status: string;
-  created_at: number;
-  sent_at: number | null;
-  scheduled_at: number | null;
-  bounced_at: number | null;
-  bounce_type: string | null;
-  bounce_diag: string | null;
-  last_error: string | null;
-  template_id: string | null;
-  tracking_enabled: number;
-  open_count: number;
-  click_count: number;
-  first_opened_at: number | null;
-  last_opened_at: number | null;
-  first_clicked_at: number | null;
-  last_clicked_at: number | null;
-  api_key_id: string | null;
-  request_json: string;
-}
-
-// Derive a single display status from the row state — same convention as
-// Resend's Emails list. Highest-priority terminal event wins (clicked beats
-// opened beats delivered/sent; bounced/complained/failed override).
-function deriveDisplayStatus(r: OutboundListRow): string {
-  if (r.bounce_type === "complaint") return "complained";
-  if (r.status === "bounced" || r.bounce_type === "hard") return "bounced";
-  if (r.bounce_type === "soft") return "delivery_delayed";
-  if (r.status === "failed") return "failed";
-  if (r.status === "canceled") return "canceled";
-  if (r.status === "scheduled") return "scheduled";
-  if (r.status === "queued" || r.status === "sending") return "queued";
-  if (r.click_count > 0) return "clicked";
-  if (r.open_count > 0) return "opened";
-  if (r.status === "sent" || r.status === "delivered") return "delivered";
-  return r.status;
-}
-
-function shapeOutbound(r: OutboundListRow) {
-  const req = JSON.parse(r.request_json) as Record<string, unknown>;
-  return {
-    id: r.id,
-    status: r.status,
-    display_status: deriveDisplayStatus(r),
-    created_at: new Date(r.created_at).toISOString(),
-    sent_at: r.sent_at ? new Date(r.sent_at).toISOString() : null,
-    scheduled_at: r.scheduled_at ? new Date(r.scheduled_at).toISOString() : null,
-    bounced_at: r.bounced_at ? new Date(r.bounced_at).toISOString() : null,
-    bounce_type: r.bounce_type,
-    bounce_diag: r.bounce_diag,
-    last_error: r.last_error,
-    from: req.from,
-    to: req.to,
-    cc: req.cc ?? null,
-    bcc: req.bcc ?? null,
-    subject: req.subject ?? null,
-    template_id: r.template_id,
-    api_key_id: r.api_key_id,
-    tracking: {
-      enabled: Boolean(r.tracking_enabled),
-      open_count: r.open_count,
-      click_count: r.click_count,
-      first_opened_at: r.first_opened_at ? new Date(r.first_opened_at).toISOString() : null,
-      last_opened_at: r.last_opened_at ? new Date(r.last_opened_at).toISOString() : null,
-      first_clicked_at: r.first_clicked_at ? new Date(r.first_clicked_at).toISOString() : null,
-      last_clicked_at: r.last_clicked_at ? new Date(r.last_clicked_at).toISOString() : null,
-    },
-  };
-}
-
-// Build the filter clause used by listOutbound / outboundStats /
-// outboundTimeseries. Keeps the supported filter dimensions in one place so
-// the three endpoints stay consistent.
-function buildOutboundFilters(
-  url: URL,
-  userId: string,
-): { sql: string; binds: Array<string | number> } | Response {
-  const status = url.searchParams.get("status");
-  const display = url.searchParams.get("display"); // delivered|clicked|opened|bounced|...
-  const domain = url.searchParams.get("domain");
-  const apiKey = url.searchParams.get("api_key");
-  const q = url.searchParams.get("q");
-  const createdAfter = url.searchParams.get("created_after");
-  const createdBefore = url.searchParams.get("created_before");
-
-  const filters: string[] = ["owner_id = ?1"];
-  const binds: Array<string | number> = [userId];
-  if (status) {
-    filters.push(`status = ?${binds.length + 1}`);
-    binds.push(status);
-  }
-  if (apiKey) {
-    filters.push(`api_key_id = ?${binds.length + 1}`);
-    binds.push(apiKey);
-  }
-  if (domain) {
-    filters.push(`json_extract(request_json, '$.from') LIKE ?${binds.length + 1}`);
-    binds.push(`%@${domain}%`);
-  }
-  if (q) {
-    filters.push(
-      `(json_extract(request_json, '$.subject') LIKE ?${binds.length + 1}
-        OR json_extract(request_json, '$.from') LIKE ?${binds.length + 1}
-        OR json_extract(request_json, '$.to') LIKE ?${binds.length + 1})`,
-    );
-    binds.push(`%${q}%`);
-  }
-  if (createdAfter) {
-    const ts = Date.parse(createdAfter);
-    if (Number.isNaN(ts)) return httpError.validation("created_after must be ISO8601");
-    filters.push(`created_at >= ?${binds.length + 1}`);
-    binds.push(ts);
-  }
-  if (createdBefore) {
-    const ts = Date.parse(createdBefore);
-    if (Number.isNaN(ts)) return httpError.validation("created_before must be ISO8601");
-    filters.push(`created_at < ?${binds.length + 1}`);
-    binds.push(ts);
-  }
-  // `display` is post-filtered in JS since it's derived (not a column).
-  if (display) {
-    // no-op here; consumer handles it
-  }
-  return { sql: filters.join(" AND "), binds };
-}
+// Same rows as /api/v1/emails (bearer) but driven by the session AuthUser.
+// Query, cursor and mapping are shared (./outbound); only the JSON shape
+// differs, because the SPA needs display_status and no idempotency_key.
 
 async function listOutbound(url: URL, env: Env, user: AuthUser): Promise<Response> {
-  const limitRaw = parseInt(url.searchParams.get("limit") ?? "50", 10);
-  const limit = Math.min(Math.max(Number.isFinite(limitRaw) ? limitRaw : 50, 1), 100);
-  const cursor = url.searchParams.get("cursor");
-  const display = url.searchParams.get("display");
-
-  const built = buildOutboundFilters(url, user.id);
-  if (built instanceof Response) return built;
-  const { sql, binds } = built;
-  const filterParts = [sql];
-  if (cursor) {
-    const [tsRaw, idRaw] = cursor.split(":");
-    const ts = parseInt(tsRaw ?? "", 10);
-    if (Number.isNaN(ts) || !idRaw) return httpError.validation("invalid cursor");
-    filterParts.push(
-      `(created_at < ?${binds.length + 1} OR (created_at = ?${binds.length + 1} AND id < ?${binds.length + 2}))`,
-    );
-    binds.push(ts, idRaw);
-  }
-
-  // When `display` is set we filter post-fetch on the derived status. To keep
-  // pagination meaningful, page through more rows internally until we either
-  // fill the page or run out — capped to keep query cost bounded.
-  const fetchLimit = display ? Math.min((limit + 1) * 4, 400) : limit + 1;
-  const res = await env.DB
-    .prepare(
-      `SELECT id, status, created_at, sent_at, scheduled_at, bounced_at,
-              bounce_type, bounce_diag, last_error, template_id,
-              tracking_enabled, open_count, click_count,
-              first_opened_at, last_opened_at, first_clicked_at, last_clicked_at,
-              api_key_id, request_json
-       FROM outbound_messages
-       WHERE ${filterParts.join(" AND ")}
-       ORDER BY created_at DESC, id DESC
-       LIMIT ${fetchLimit}`,
-    )
-    .bind(...binds)
-    .all<OutboundListRow>();
-  let rows = res.results ?? [];
-  if (display) {
-    rows = rows.filter((r) => deriveDisplayStatus(r) === display);
-  }
-  const hasMore = rows.length > limit;
-  const page = hasMore ? rows.slice(0, limit) : rows;
-  const next = hasMore && page.length
-    ? `${page[page.length - 1]!.created_at}:${page[page.length - 1]!.id}`
-    : null;
+  const page = await listOutboundRows(url, env, user.id);
+  if (page instanceof Response) return page;
   return Response.json({
     object: "list",
-    has_more: hasMore,
-    next_cursor: next,
-    data: page.map(shapeOutbound),
+    has_more: page.hasMore,
+    next_cursor: page.nextCursor,
+    data: page.rows.map((r) => shapeOutbound(r, "inbox")),
   });
 }
 
@@ -1053,7 +858,7 @@ async function outboundStats(url: URL, env: Env, user: AuthUser): Promise<Respon
   const res = await env.DB
     .prepare(
       `SELECT status, bounce_type, open_count, click_count
-       FROM outbound_messages WHERE ${sql}`,
+       FROM outbound_messages om WHERE ${sql}`,
     )
     .bind(...binds)
     .all<StatsRow>();
@@ -1117,7 +922,7 @@ async function outboundTimeseries(url: URL, env: Env, user: AuthUser): Promise<R
   const res = await env.DB
     .prepare(
       `SELECT created_at, status, bounce_type, open_count, click_count
-       FROM outbound_messages WHERE ${sql} ORDER BY created_at ASC`,
+       FROM outbound_messages om WHERE ${sql} ORDER BY created_at ASC`,
     )
     .bind(...binds)
     .all<TimeseriesRow>();
@@ -1262,46 +1067,15 @@ async function listInbound(url: URL, env: Env, user: AuthUser): Promise<Response
 }
 
 async function getOutbound(env: Env, user: AuthUser, id: string): Promise<Response> {
-  const row = await env.DB
-    .prepare(
-      `SELECT id, status, created_at, sent_at, scheduled_at, bounced_at,
-              bounce_type, bounce_diag, last_error, template_id,
-              tracking_enabled, open_count, click_count,
-              first_opened_at, last_opened_at, first_clicked_at, last_clicked_at,
-              api_key_id, request_json
-       FROM outbound_messages WHERE id = ?1 AND owner_id = ?2`,
-    )
-    .bind(id, user.id)
-    .first<OutboundListRow>();
+  const row = await getOutboundRow(env, user.id, id);
   if (!row) return httpError.notFound(`outbound ${id} not found`);
-  return Response.json(shapeOutbound(row));
+  return Response.json(shapeOutbound(row, "inbox"));
 }
 
 async function getOutboundEvents(env: Env, user: AuthUser, id: string): Promise<Response> {
-  const owns = await env.DB
-    .prepare(`SELECT id FROM outbound_messages WHERE id = ?1 AND owner_id = ?2`)
-    .bind(id, user.id)
-    .first<{ id: string }>();
-  if (!owns) return httpError.notFound(`outbound ${id} not found`);
-  const res = await env.DB
-    .prepare(
-      `SELECT id, type, payload_json, created_at
-       FROM events
-       WHERE owner_id = ?1 AND (outbound_id = ?2 OR email_id = ?2)
-       ORDER BY created_at ASC`,
-    )
-    .bind(user.id, id)
-    .all<{ id: string; type: string; payload_json: string; created_at: number }>();
-  return Response.json({
-    object: "list",
-    email_id: id,
-    data: (res.results ?? []).map((r) => ({
-      id: r.id,
-      type: r.type,
-      created_at: new Date(r.created_at).toISOString(),
-      data: JSON.parse(r.payload_json),
-    })),
-  });
+  const data = await listOutboundEvents(env, user.id, id);
+  if (!data) return httpError.notFound(`outbound ${id} not found`);
+  return Response.json({ object: "list", email_id: id, data });
 }
 
 async function listEvents(url: URL, env: Env, user: AuthUser): Promise<Response> {

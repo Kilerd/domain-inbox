@@ -5,6 +5,7 @@ import { api, ApiError } from "@/api";
 import { AddressChips } from "@/components/AddressChips";
 import { AttachmentDropzone, type ComposeAttachment } from "@/components/AttachmentDropzone";
 import { Button, ErrorText, FOCUS_RING, Input, Textarea } from "@/components/ui";
+import { domainOf } from "@/lib/address";
 import { useCompose, type ComposePrefill } from "@/lib/compose-store";
 import { cn } from "@/lib/utils";
 
@@ -33,11 +34,6 @@ interface DraftState {
   body: string;
   bodyMode: "text" | "html";
   attachments: ComposeAttachment[];
-}
-
-function domainOf(address: string): string {
-  const at = address.lastIndexOf("@");
-  return at >= 0 ? address.slice(at + 1).trim().toLowerCase() : "";
 }
 
 function emptyDraft(prefill: ComposePrefill | null): DraftState {

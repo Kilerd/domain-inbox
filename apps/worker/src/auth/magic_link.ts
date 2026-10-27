@@ -1,24 +1,12 @@
 import { EmailMessage } from "cloudflare:email";
 import { createMimeMessage } from "mimetext";
 import type { Env } from "../env";
+import { base64urlRandom, sha256Hex } from "../utils/crypto";
 import { log } from "../utils/log";
 
 const LOGIN_TOKEN_TTL_MS = 15 * 60 * 1000; // 15 minutes
 const RATE_LIMIT_WINDOW_S = 3600;
 const RATE_LIMIT_MAX = 5;
-
-function base64urlRandom(bytes: number): string {
-  const buf = new Uint8Array(bytes);
-  crypto.getRandomValues(buf);
-  let bin = "";
-  for (const b of buf) bin += String.fromCharCode(b);
-  return btoa(bin).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
-}
-
-async function sha256Hex(input: string): Promise<string> {
-  const buf = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(input));
-  return [...new Uint8Array(buf)].map((b) => b.toString(16).padStart(2, "0")).join("");
-}
 
 export async function isAllowed(env: Env, email: string): Promise<boolean> {
   const row = await env.DB

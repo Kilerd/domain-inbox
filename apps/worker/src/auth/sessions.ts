@@ -1,23 +1,8 @@
 import type { Env } from "../env";
 import { newId } from "../ids";
+import { base64urlRandom, sha256Hex } from "../utils/crypto";
 
 const SESSION_TTL_MS = 30 * 24 * 60 * 60 * 1000; // 30 days
-
-function base64urlRandom(bytes: number): string {
-  const buf = new Uint8Array(bytes);
-  crypto.getRandomValues(buf);
-  let bin = "";
-  for (const b of buf) bin += String.fromCharCode(b);
-  return btoa(bin).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
-}
-
-async function sha256Hex(input: string): Promise<string> {
-  const buf = await crypto.subtle.digest(
-    "SHA-256",
-    new TextEncoder().encode(input),
-  );
-  return [...new Uint8Array(buf)].map((b) => b.toString(16).padStart(2, "0")).join("");
-}
 
 export interface CreatedSession {
   rawToken: string;

@@ -24,13 +24,9 @@ import {
 } from "@/api";
 import { Badge, Button } from "@/components/ui";
 import { FLAG_ARCHIVED, FLAG_SPAM, FLAG_STARRED, FLAG_TRASH, has } from "@/lib/flags";
+import { domainOf } from "@/lib/address";
 import { useCompose, type ComposePrefill } from "@/lib/compose-store";
 import { cn } from "@/lib/utils";
-
-function addressDomain(address: string): string {
-  const at = address.lastIndexOf("@");
-  return at >= 0 ? address.slice(at + 1).trim().toLowerCase() : "";
-}
 
 function normalizeSubjectPrefix(subject: string, prefix: "Re:" | "Fwd:"): string {
   let prev = "";
@@ -296,7 +292,7 @@ function useReplyHandlers(
       // No exact recipient address available — offer the most recent sender
       // on the same domain, or hello@<domain> as a last resort.
       const sameDomain = suggestionsQ.data?.data.find(
-        (s) => addressDomain(s.address) === fromDomain,
+        (s) => domainOf(s.address) === fromDomain,
       )?.address;
       fromAddr = sameDomain ?? `hello@${fromDomain}`;
     }

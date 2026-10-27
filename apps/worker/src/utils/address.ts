@@ -40,8 +40,18 @@ export function firstInvalid(addrs: Addr[]): string | null {
   return null;
 }
 
-export function domainOf(addr: string): string | null {
+export interface SplitAddress {
+  localPart: string;
+  domain: string;
+}
+
+/** `local@domain` split once, at the last `@`; null when either part is empty. */
+export function splitAddress(addr: string): SplitAddress | null {
   const at = addr.lastIndexOf("@");
   if (at <= 0) return null;
-  return addr.slice(at + 1).toLowerCase();
+  return { localPart: addr.slice(0, at), domain: addr.slice(at + 1).toLowerCase() };
+}
+
+export function domainOf(addr: string): string | null {
+  return splitAddress(addr)?.domain ?? null;
 }

@@ -1,6 +1,7 @@
 import type { Env } from "../env";
 import { httpError } from "../http";
 import { newId } from "../ids";
+import { EMAIL_RE } from "../utils/address";
 import { log } from "../utils/log";
 import {
   consumeLoginToken,
@@ -42,7 +43,7 @@ async function postLogin(req: Request, env: Env, ctx: ExecutionContext): Promise
     return httpError.badRequest("request body must be JSON");
   }
   const email = typeof body.email === "string" ? body.email.trim().toLowerCase() : "";
-  if (!/^[a-z0-9._%+-]+@[a-z0-9.-]+\.[a-z]{2,}$/i.test(email)) {
+  if (!EMAIL_RE.test(email)) {
     return httpError.validation("invalid email");
   }
 

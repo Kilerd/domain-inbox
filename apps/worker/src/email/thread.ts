@@ -1,5 +1,6 @@
 import type { Env } from "../env";
 import { newId } from "../ids";
+import { THREAD_MESSAGE_COUNT_SQL, THREAD_UNREAD_SQL } from "./counters";
 
 export function normalizeSubject(s: string | null | undefined): string {
   if (!s) return "";
@@ -140,8 +141,8 @@ export async function assignThread(env: Env, messageId: string): Promise<void> {
          participants_json = ?2,
          last_message_at  = MAX(last_message_at, ?3),
          first_message_at = MIN(first_message_at, ?3),
-         message_count    = (SELECT COUNT(*) FROM messages WHERE thread_id = ?1 AND parse_status != 'duplicate'),
-         unread_count     = (SELECT COUNT(*) FROM messages WHERE thread_id = ?1 AND parse_status != 'duplicate' AND (flags_bitmap & 1) = 0),
+         message_count    = ${THREAD_MESSAGE_COUNT_SQL},
+         unread_count     = ${THREAD_UNREAD_SQL},
          domain_id        = COALESCE(domain_id, ?4)
        WHERE id = ?1`,
     )

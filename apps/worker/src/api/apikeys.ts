@@ -2,7 +2,8 @@ import type { AuthUser } from "../auth";
 import type { Env } from "../env";
 import { httpError } from "../http";
 import { newId } from "../ids";
-import { newToken, sha256Hex, tokenPrefix } from "./apikey_auth";
+import { sha256Hex } from "../utils/crypto";
+import { newToken, tokenPrefix } from "./apikey_auth";
 
 const DEFAULT_SCOPES = ["emails.send", "emails.read", "domains.read"] as const;
 const KNOWN_SCOPES = new Set<string>([...DEFAULT_SCOPES, "inbox.read"]);

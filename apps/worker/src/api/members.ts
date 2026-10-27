@@ -1,6 +1,7 @@
 import type { AuthUser } from "../auth";
 import type { Env } from "../env";
 import { httpError } from "../http";
+import { EMAIL_RE } from "../utils/address";
 
 interface AllowlistRow {
   email: string;
@@ -90,7 +91,7 @@ async function inviteMember(req: Request, env: Env, owner: AuthUser): Promise<Re
     return httpError.badRequest("request body must be JSON");
   }
   const email = typeof body.email === "string" ? body.email.trim().toLowerCase() : "";
-  if (!/^[a-z0-9._%+-]+@[a-z0-9.-]+\.[a-z]{2,}$/i.test(email)) {
+  if (!EMAIL_RE.test(email)) {
     return httpError.validation("invalid email");
   }
   await env.DB

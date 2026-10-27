@@ -1,7 +1,8 @@
 import type { Env } from "../env";
 import { newId } from "../ids";
 import { log } from "../utils/log";
-import { domainOf } from "../utils/address";
+import { domainOf, splitAddress } from "../utils/address";
+import { FLAG_AUXILIARY } from "../utils/flags";
 import { tryProcessBounce } from "./bounce";
 import { parseAndEnrichMessage } from "./parse";
 import { assignThread } from "./thread";
@@ -26,9 +27,9 @@ async function ensureAlias(
   fullAddress: string,
 ): Promise<{ id: string; disabled: boolean } | null> {
   const lower = fullAddress.toLowerCase();
-  const at = lower.lastIndexOf("@");
-  if (at <= 0) return null;
-  const localPart = lower.slice(0, at);
+  const split = splitAddress(lower);
+  if (!split) return null;
+  const localPart = split.localPart;
   const existing = await env.DB
     .prepare(
       `SELECT id, disabled FROM aliases WHERE domain_id = ?1 AND local_part = ?2 LIMIT 1`,
@@ -185,6 +186,18 @@ export async function handleInboundEmail(
     // `email.received` fanout in that case — the bounce-specific event covers it.
     const bounce = await tryProcessBounce(env, rawText, _ctx);
 
+    // DSN/ARF reports stay in the thread, but are marked auxiliary so they
+    // never count toward an alias's unread badge (a bounce flood must not
+    // look like correspondence).
+    if (bounce) {
+      await env.DB
+        .prepare(
+          `UPDATE messages SET flags_bitmap = flags_bitmap | ?2 WHERE id = ?1`,
+        )
+        .bind(messageId, FLAG_AUXILIARY)
+        .run();
+    }
+
     if (!bounce) {
       const parsed = await env.DB
         .prepare(`SELECT subject, parse_status FROM messages WHERE id = ?1`)
@@ -220,9 +233,10 @@ export async function handleInboundEmail(
       }
     }
 
-    // Bump alias counters once we know the message ended up parsed (not a
-    // duplicate, not parse-failed). DSN/ARF reports are skipped — a bounce
-    // flood shouldn't inflate unread badges.
+    // Bump the alias's message counters once the message is parsed (not a
+    // duplicate, not parse-failed). Unread is derived at read time — from
+    // inbound, non-duplicate, non-auxiliary messages — so no write path can
+    // leave it out of sync.
     if (aliasId && !bounce) {
       const post = await env.DB
         .prepare(`SELECT parse_status FROM messages WHERE id = ?1`)
@@ -233,7 +247,6 @@ export async function handleInboundEmail(
           .prepare(
             `UPDATE aliases SET
                message_count   = message_count + 1,
-               unread_count    = unread_count + 1,
                last_message_at = MAX(COALESCE(last_message_at, 0), ?2)
              WHERE id = ?1`,
           )

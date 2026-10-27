@@ -1,6 +1,7 @@
 import PostalMime from "postal-mime";
 import type { Env } from "../env";
 import { newId } from "../ids";
+import { sha256Hex } from "../utils/crypto";
 import { log } from "../utils/log";
 
 interface ParsedAddress {
@@ -60,11 +61,6 @@ function stripHtml(html: string): string {
     .replace(/&#39;/g, "'")
     .replace(/\s+/g, " ")
     .trim();
-}
-
-async function sha256Hex(bytes: Uint8Array): Promise<string> {
-  const buf = await crypto.subtle.digest("SHA-256", bytes);
-  return [...new Uint8Array(buf)].map((b) => b.toString(16).padStart(2, "0")).join("");
 }
 
 function toUint8(content: ArrayBuffer | Uint8Array): Uint8Array {
