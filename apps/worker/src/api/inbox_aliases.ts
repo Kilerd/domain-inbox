@@ -62,11 +62,13 @@ export async function listInboxAliases(url: URL, env: Env, user: AuthUser): Prom
     SELECT a.id, a.domain_id, a.full_address, a.local_part, a.type, a.label,
            a.disabled, a.hidden, a.message_count, a.last_message_at,
            (SELECT COUNT(*) FROM messages m
+             JOIN threads t ON t.id = m.thread_id
              WHERE m.alias_id = a.id
                AND m.parse_status != 'duplicate'
                AND m.direction = 'inbound'
                AND (m.flags_bitmap & ${FLAG_AUXILIARY}) = 0
-               AND (m.flags_bitmap & ${FLAG_READ}) = 0) AS unread_count
+               AND (m.flags_bitmap & ${FLAG_READ}) = 0
+               AND (t.flags_bitmap & ${FLAG_ARCHIVED | FLAG_TRASH | FLAG_SPAM}) = 0) AS unread_count
     FROM aliases a JOIN domains d ON d.id = a.domain_id
     WHERE ${where.join(" AND ")}`;
 

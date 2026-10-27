@@ -161,6 +161,45 @@ export interface ApiKeyCreated extends Omit<ApiKey, "last_used_at" | "revoked_at
   token: string;
 }
 
+// ── Inbound rules & vacation responder ────────────────────────────────────
+
+export interface RuleMatch {
+  from?: string;
+  to?: string;
+  subject?: string;
+  hasAttachment?: boolean;
+}
+
+export interface RuleActions {
+  star?: boolean;
+  archive?: boolean;
+  trash?: boolean;
+  spam?: boolean;
+  read?: boolean;
+}
+
+export interface EmailRule {
+  object: "rule";
+  id: string;
+  name: string;
+  enabled: boolean;
+  priority: number;
+  match: RuleMatch;
+  actions: RuleActions;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface VacationSettings {
+  object: "vacation";
+  enabled: boolean;
+  subject: string | null;
+  body_text: string;
+  start_at: string | null;
+  end_at: string | null;
+  updated_at: string | null;
+}
+
 // ── Members ───────────────────────────────────────────────────────────────
 
 export interface Member {
@@ -509,6 +548,54 @@ export const api = {
       `/api/v1/api-keys/${id}`,
       { method: "DELETE" },
     ),
+
+  // Inbound rules
+  listRules: () =>
+    fetchJson<ListResp<EmailRule>>("/api/v1/rules").then((r) => r.data),
+  createRule: (params: {
+    name?: string;
+    match: RuleMatch;
+    actions: RuleActions;
+    enabled?: boolean;
+    priority?: number;
+  }) =>
+    fetchJson<EmailRule>("/api/v1/rules", {
+      method: "POST",
+      body: JSON.stringify(params),
+    }),
+  updateRule: (
+    id: string,
+    params: Partial<{
+      name: string;
+      match: RuleMatch;
+      actions: RuleActions;
+      enabled: boolean;
+      priority: number;
+    }>,
+  ) =>
+    fetchJson<EmailRule>(`/api/v1/rules/${id}`, {
+      method: "PATCH",
+      body: JSON.stringify(params),
+    }),
+  deleteRule: (id: string) =>
+    fetchJson<{ object: "rule"; id: string; deleted: true }>(
+      `/api/v1/rules/${id}`,
+      { method: "DELETE" },
+    ),
+
+  // Vacation responder
+  getVacation: () => fetchJson<VacationSettings>("/api/v1/vacation"),
+  saveVacation: (params: {
+    enabled: boolean;
+    subject?: string | null;
+    body_text: string;
+    start_at?: string | null;
+    end_at?: string | null;
+  }) =>
+    fetchJson<VacationSettings>("/api/v1/vacation", {
+      method: "PUT",
+      body: JSON.stringify(params),
+    }),
 
   // Webhooks
   listWebhooks: () =>

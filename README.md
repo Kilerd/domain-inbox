@@ -17,6 +17,9 @@ web UI. A free Cloudflare account is enough to get started.
 - **A Resend-compatible send API.** Point the official Resend SDK at your
   Worker via one env var — same idempotency, batch, GET/cancel, Svix-signed
   webhooks. Verified against the real Resend Node SDK.
+- **Inbound automation.** Rules match sender/recipient/subject/attachment and
+  apply star/archive/trash/spam/read. A per-owner vacation responder replies
+  once per sender every three days, with loop/automation/suppression guards.
 - **All on Cloudflare.** D1 for metadata, R2 for raw MIME, KV for fast token
   lookup. No external services.
 

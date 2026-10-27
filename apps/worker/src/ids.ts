@@ -17,6 +17,7 @@ const PREFIX = {
   webhookMessage: "msg_",
   suppression: "sup_",
   template: "tpl_",
+  rule: "rul_",
 } as const;
 
 type IdKind = keyof typeof PREFIX;
@@ -40,4 +41,5 @@ export const newId = {
   webhookMessage: () => gen("webhookMessage"),
   suppression: () => gen("suppression"),
   template: () => gen("template"),
+  rule: () => gen("rule"),
 };

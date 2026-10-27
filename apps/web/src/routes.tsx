@@ -116,7 +116,7 @@ const settingsIndexRoute = createRoute({
   },
 });
 
-export type SettingsTab = "domains" | "api-keys" | "webhooks" | "members";
+export type SettingsTab = "domains" | "rules" | "api-keys" | "webhooks" | "members";
 
 const settingsTabRoute = createRoute({
   getParentRoute: () => rootRoute,

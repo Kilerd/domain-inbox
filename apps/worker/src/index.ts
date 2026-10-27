@@ -3,6 +3,7 @@ import { authenticateApiKey } from "./api/apikey_auth";
 import { tryAuthRoutes } from "./api/auth";
 import { handleDomains } from "./api/domains";
 import { handleMembers } from "./api/members";
+import { handleRules } from "./api/rules";
 import {
   cancelOutboundMessage,
   getOutboundMessage,
@@ -20,6 +21,7 @@ import { handleInbox } from "./api/inbox";
 import { handleSuppressions } from "./api/suppressions";
 import { handleTemplates } from "./api/templates";
 import { handleClickRedirect, handleOpenPixel } from "./api/tracking";
+import { handleVacation } from "./api/vacation";
 import { handleWebhooks } from "./api/webhooks";
 import { authenticate } from "./auth";
 import { handleInboundEmail } from "./email/ingest";
@@ -304,6 +306,12 @@ async function tryUser(
   if (url.pathname === "/api/v1/webhooks" || url.pathname.startsWith("/api/v1/webhooks/")) {
     return handleWebhooks(url, req, env, user);
   }
+  if (url.pathname === "/api/v1/rules" || url.pathname.startsWith("/api/v1/rules/")) {
+    return handleRules(url, req, env, user);
+  }
+  if (url.pathname === "/api/v1/vacation") {
+    return handleVacation(url, req, env, user);
+  }
   if (
     url.pathname === "/api/v1/suppressions" ||
     url.pathname.startsWith("/api/v1/suppressions/")
@@ -385,7 +393,13 @@ async function handleInjectEmail(req: Request, env: Env): Promise<Response> {
   }
 
   const rawStream = new Response(rawBytes).body!;
-  const ctxLike = { waitUntil() {}, passThroughOnException() {} } as unknown as ExecutionContext;
+  const pending: Promise<unknown>[] = [];
+  const ctxLike = {
+    waitUntil(p: Promise<unknown>) {
+      pending.push(p);
+    },
+    passThroughOnException() {},
+  } as unknown as ExecutionContext;
   const fakeMessage = {
     from,
     to,
@@ -399,6 +413,9 @@ async function handleInjectEmail(req: Request, env: Env): Promise<Response> {
 
   try {
     await handleInboundEmail(fakeMessage, env, ctxLike);
+    // The fixture runs the same post-processing as production, including
+    // waitUntil work (vacation replies, webhook fan-out).
+    await Promise.allSettled(pending);
     return Response.json({ ok: true });
   } catch (err) {
     return Response.json({ ok: false, error: String(err) }, { status: 500 });

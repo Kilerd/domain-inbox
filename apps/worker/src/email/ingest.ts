@@ -5,7 +5,9 @@ import { domainOf, splitAddress } from "../utils/address";
 import { FLAG_AUXILIARY } from "../utils/flags";
 import { tryProcessBounce } from "./bounce";
 import { parseAndEnrichMessage } from "./parse";
+import { applyInboundRules, authFailureSpam } from "./rules";
 import { assignThread } from "./thread";
+import { maybeAutoReply } from "./vacation";
 import { fanoutEvent } from "../webhooks/dispatch";
 
 interface OwnerLookup {
@@ -201,12 +203,21 @@ export async function handleInboundEmail(
         .run();
     }
 
-    if (!bounce) {
-      const parsed = await env.DB
-        .prepare(`SELECT subject, parse_status FROM messages WHERE id = ?1`)
-        .bind(messageId)
-        .first<{ subject: string | null; parse_status: string }>();
-      if (parsed?.parse_status === "parsed") {
+    // One metadata read for the event, rules, vacation and alias counters.
+    const meta = await env.DB
+      .prepare(
+        `SELECT subject, rfc822_message_id, parse_status
+         FROM messages WHERE id = ?1`,
+      )
+      .bind(messageId)
+      .first<{
+        subject: string | null;
+        rfc822_message_id: string | null;
+        parse_status: string;
+      }>();
+
+    if (meta?.parse_status === "parsed") {
+      if (!bounce) {
         const eventId = newId.event();
         await env.DB
           .prepare(
@@ -220,7 +231,7 @@ export async function handleInboundEmail(
             JSON.stringify({
               from: fromAddr,
               to: toAddr,
-              subject: parsed.subject,
+              subject: meta.subject,
             }),
             Date.now(),
           )
@@ -230,22 +241,27 @@ export async function handleInboundEmail(
             message_id: messageId,
             from: fromAddr,
             to: toAddr,
-            subject: parsed.subject,
+            subject: meta.subject,
           }, eventId),
         );
       }
-    }
 
-    // Bump the alias's message counters once the message is parsed (not a
-    // duplicate, not parse-failed). Unread is derived at read time — from
-    // inbound, non-duplicate, non-auxiliary messages — so no write path can
-    // leave it out of sync.
-    if (aliasId && !bounce) {
-      const post = await env.DB
-        .prepare(`SELECT parse_status FROM messages WHERE id = ?1`)
-        .bind(messageId)
-        .first<{ parse_status: string }>();
-      if (post?.parse_status === "parsed") {
+      // Rules + conservative auth-result quarantine. DSNs skip both.
+      let spam = false;
+      if (!bounce) {
+        spam = await applyInboundRules(
+          env,
+          owner.ownerId,
+          messageId,
+          authFailureSpam(rawText),
+        );
+      }
+
+      // Bump the alias's message counters once the message is parsed (not a
+      // duplicate, not parse-failed). Unread is derived at read time — from
+      // inbound, non-duplicate, non-auxiliary messages — so no write path can
+      // leave it out of sync.
+      if (aliasId && !bounce) {
         await env.DB
           .prepare(
             `UPDATE aliases SET
@@ -255,6 +271,24 @@ export async function handleInboundEmail(
           )
           .bind(aliasId, now)
           .run();
+      }
+
+      // Vacation reply last: never for bounced/automated mail or spam.
+      if (!bounce && !spam) {
+        _ctx.waitUntil(
+          maybeAutoReply(
+            env,
+            {
+              ownerId: owner.ownerId,
+              from: fromAddr,
+              to: toAddr,
+              subject: meta.subject,
+              rawEml: rawText,
+              inReplyTo: meta.rfc822_message_id,
+            },
+            now,
+          ),
+        );
       }
     }
   } catch (err) {

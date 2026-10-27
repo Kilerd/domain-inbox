@@ -97,6 +97,12 @@ describe("alias unread is derived from messages", () => {
       unread_count: 1,
     });
   });
+
+  it("does not count spam/archived/trash threads", async () => {
+    db.prepare(`UPDATE threads SET flags_bitmap = 16 WHERE id = 't_1'`).run();
+    const { json } = await call("/api/inbox/aliases?domain=d_1");
+    expect((json.data as Array<Record<string, unknown>>)[0]!.unread_count).toBe(0);
+  });
 });
 
 describe("inbox is received mail only", () => {

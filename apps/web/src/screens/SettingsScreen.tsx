@@ -4,16 +4,18 @@ import { api } from "@/api";
 import { ApiKeysTab } from "./settings/ApiKeysTab";
 import { DomainsTab } from "./settings/DomainsTab";
 import { MembersTab } from "./settings/MembersTab";
+import { RulesTab } from "./settings/RulesTab";
 import { WebhooksTab } from "./settings/WebhooksTab";
 import { cn } from "@/lib/utils";
 
-type Tab = "domains" | "api-keys" | "webhooks" | "members";
-const VALID_TABS: Tab[] = ["domains", "api-keys", "webhooks", "members"];
+type Tab = "domains" | "rules" | "api-keys" | "webhooks" | "members";
+const VALID_TABS: Tab[] = ["domains", "rules", "api-keys", "webhooks", "members"];
 
 // Templates + Suppressions used to live here but are content/data screens
 // rather than config knobs — promoted to top-level navbar in App.tsx.
 const TABS: { id: Tab; label: string; ownerOnly?: boolean }[] = [
   { id: "domains", label: "Domains" },
+  { id: "rules", label: "Rules" },
   { id: "api-keys", label: "API Keys" },
   { id: "webhooks", label: "Webhooks" },
   { id: "members", label: "Members", ownerOnly: true },
@@ -57,6 +59,7 @@ export function SettingsScreen() {
         </div>
 
         {tab === "domains" && <DomainsTab />}
+        {tab === "rules" && <RulesTab />}
         {tab === "api-keys" && <ApiKeysTab />}
         {tab === "webhooks" && <WebhooksTab />}
         {tab === "members" && <MembersTab />}
