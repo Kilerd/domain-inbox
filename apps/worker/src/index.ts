@@ -12,6 +12,7 @@ import {
   listOutboundMessages,
   patchOutboundMessage,
   processScheduledSends,
+  reapStuckSends,
 } from "./api/emails";
 import { releaseExpiredIdempotencyKeys } from "./api/idempotency";
 import { handleImgProxy } from "./api/img_proxy";
@@ -24,6 +25,7 @@ import { authenticate } from "./auth";
 import { handleInboundEmail } from "./email/ingest";
 import type { Env } from "./env";
 import { httpError } from "./http";
+import { log } from "./utils/log";
 import { retryPendingWebhookDeliveries, svixSign } from "./webhooks/dispatch";
 
 export default {
@@ -51,10 +53,19 @@ export default {
 
   // Cron sweep (see wrangler.toml [triggers]): due scheduled sends, webhook
   // delivery retries, and releasing Idempotency-Keys past their 24 h window.
-  async scheduled(_controller: ScheduledController, env: Env, ctx: ExecutionContext): Promise<void> {
-    ctx.waitUntil(processScheduledSends(env, ctx));
-    ctx.waitUntil(retryPendingWebhookDeliveries(env));
-    ctx.waitUntil(releaseExpiredIdempotencyKeys(env));
+  async scheduled(controller: ScheduledController, env: Env, ctx: ExecutionContext): Promise<void> {
+    log.info("cron.start", { cron: controller.cron, scheduled_time: controller.scheduledTime });
+    // Every task is isolated: one failure must not take the rest of the
+    // sweep down (and the label makes the failing task visible in logs).
+    const run = (task: string, p: Promise<unknown>) =>
+      p.catch((err) => log.warn("cron.task_failed", { task, error: String(err) }));
+    ctx.waitUntil(run("scheduled-sends", processScheduledSends(env, ctx)));
+    ctx.waitUntil(run("webhook-retries", retryPendingWebhookDeliveries(env)));
+    ctx.waitUntil(run("idempotency-sweep", releaseExpiredIdempotencyKeys(env)));
+    // A send that never recorded an outcome (client disconnect, isolate
+    // eviction mid-send) stays 'sending' forever; mark it failed so the
+    // outbox/API can retry it and the activity view stops lying.
+    ctx.waitUntil(run("stuck-sends", reapStuckSends(env)));
   },
 } satisfies ExportedHandler<Env>;
 
@@ -100,7 +111,16 @@ async function tryPublic(url: URL, req: Request, env: Env): Promise<Response | n
   if (url.pathname === "/api/img-proxy") {
     return handleImgProxy(url, env);
   }
-  if (env.ENV === "dev") {
+  // Test fixtures (`/_test/*`, `/_debug/*`) are only for development. They
+  // used to gate on ENV === "dev" alone — but the live deployment also runs
+  // with ENV=dev, which left an unauthenticated send/inject surface open to
+  // the internet. Require the dev backdoor secret as well: on a deployment
+  // without DEV_USER_TOKEN these routes simply do not exist.
+  if (
+    env.ENV === "dev" &&
+    env.DEV_USER_TOKEN &&
+    req.headers.get("X-Dev-Auth") === env.DEV_USER_TOKEN
+  ) {
     return tryDevFixtures(url, req, env);
   }
   return null;

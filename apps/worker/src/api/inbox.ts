@@ -177,7 +177,9 @@ async function composeEmail(
     scopes: ["emails.send", "emails.read"],
     domain_scope: null,
   };
-  return handleEmailSend(req, env, auth, ctx);
+  // Keep the browser path synchronous: the drawer refetches the inbox as soon
+  // as this resolves, so the sent message must already be persisted.
+  return handleEmailSend(req, env, auth, ctx, false);
 }
 
 /**

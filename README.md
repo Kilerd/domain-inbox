@@ -196,6 +196,17 @@ pnpm --filter @domain-inbox/worker run test
 pnpm --filter @domain-inbox/worker run typecheck
 ```
 
+`/api/_test/*` and `/api/_debug/*` are disabled unless `DEV_USER_TOKEN` is set
+and the request carries `X-Dev-Auth: <token>`. Put `DEV_USER_TOKEN=…` in
+`apps/worker/.dev.vars` (gitignored) to use the fixtures locally; a deployment
+without that secret does not expose them at all.
+
+`POST /api/v1/emails` answers with `{id}` as soon as the outbound row is
+reserved; the provider call and inbox persistence finish in the background.
+Poll `GET /api/v1/emails/:id` (or listen to webhooks / `…/events`) for the
+outcome. The browser compose path still waits until the sent message is
+persisted.
+
 For a first-time deploy, see [DEPLOY.md](./DEPLOY.md). For one-time
 Cloudflare Email Routing / Sending setup notes, see [CHECKLIST.md](./CHECKLIST.md).
 

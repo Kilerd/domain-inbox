@@ -2,11 +2,12 @@
 // Node HMAC implementation, then verifies the same signature with the official
 // `svix` SDK directly (the library Resend's webhook verification is built on).
 //
-// Requires a worker running the *dev* environment (ENV=dev) — the
-// /api/_test/sign endpoint it calls is dev-only.
+// Requires the dev fixtures: the worker must run with ENV=dev *and* have
+// DEV_USER_TOKEN set; pass the same value here. Without it, /api/_test/* is
+// disabled (including on the live deployment).
 //
 // Usage:
-//   BASE_URL=https://domain-inbox-dev.<your-subdomain>.workers.dev \
+//   BASE_URL=http://127.0.0.1:8787 DEV_USER_TOKEN=… \
 //     node webhook-signature-check.mjs
 
 import crypto from "node:crypto";
@@ -35,15 +36,19 @@ const body = JSON.stringify({ type: "email.sent", data: { id: "o_x" } });
 const sigNode = signNode(secret, msgId, timestamp, body);
 console.log("node     sig:", sigNode);
 
+const devAuth = process.env.DEV_USER_TOKEN;
 const workerRes = await fetch(`${BASE}/api/_test/sign`, {
   method: "POST",
-  headers: { "content-type": "application/json" },
+  headers: {
+    "content-type": "application/json",
+    ...(devAuth ? { "X-Dev-Auth": devAuth } : {}),
+  },
   body: JSON.stringify({ secret, msg_id: msgId, timestamp, body }),
 });
 if (!workerRes.ok) {
   console.error(`worker returned ${workerRes.status} for POST ${BASE}/api/_test/sign`);
   console.error(
-    "hint: /api/_test/sign is dev-only — point BASE_URL at a worker running the dev environment (ENV=dev, e.g. the domain-inbox-dev deployment or `wrangler dev`).",
+    "hint: /api/_test/* is disabled unless the worker has DEV_USER_TOKEN set and the request sends X-Dev-Auth with the same value. Start `wrangler dev` with DEV_USER_TOKEN in .dev.vars and rerun with DEV_USER_TOKEN=… .",
   );
   process.exit(2);
 }

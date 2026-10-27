@@ -69,6 +69,13 @@ export async function handleEmailSend(
   env: Env,
   key: ApiKeyAuth,
   ctx?: ExecutionContext,
+  /**
+   * API-key callers get Resend's async semantics: answer with the id once the
+   * row is reserved, and finish the provider call in the background. The
+   * browser compose path passes `false` because its drawer immediately
+   * refetches the inbox and expects the sent message to already be there.
+   */
+  background = true,
 ): Promise<Response> {
   if (!key.scopes.includes("emails.send")) {
     return httpError.forbidden("API key lacks emails.send scope");
@@ -215,7 +222,7 @@ export async function handleEmailSend(
     return Response.json({ id: outboundId });
   }
 
-  return executeSend(env, ctx, key.user_id, body, {
+  const send = executeSend(env, ctx, key.user_id, body, {
     outboundId,
     idempotency,
     from,
@@ -227,6 +234,53 @@ export async function handleEmailSend(
     dom,
     tracking,
   });
+
+  // Resend answers `POST /emails` as soon as the message is accepted, not
+  // when the provider finishes. Doing the provider round-trip inline kept the
+  // response at 4–9 s, which is too close to the 10 s timeout many clients
+  // use (Hub retried and backed off, delaying verification mail by minutes).
+  if (background && ctx) {
+    ctx.waitUntil(send.catch((err) => markSendCrashed(env, outboundId, err)));
+    return Response.json({ id: outboundId });
+  }
+  return send;
+}
+
+/**
+ * Last-resort handler for an unexpected exception in the background send
+ * (D1/R2 failure, not a provider refusal — those are recorded by
+ * `executeSend` itself). Leaves the row observable instead of stuck in
+ * 'sending' until the cron watchdog picks it up.
+ */
+async function markSendCrashed(env: Env, outboundId: string, err: unknown): Promise<void> {
+  const message = `send crashed: ${String((err as Error)?.message ?? err)}`;
+  try {
+    const upd = await env.DB
+      .prepare(
+        `UPDATE outbound_messages SET status = 'failed', last_error = ?2
+         WHERE id = ?1 AND status = 'sending'`,
+      )
+      .bind(outboundId, message)
+      .run();
+    if ((upd.meta.changes ?? 0) > 0) {
+      await env.DB
+        .prepare(
+          `INSERT INTO events (id, owner_id, type, outbound_id, email_id, payload_json, created_at)
+           SELECT ?1, owner_id, 'email.failed', ?2, ?2, ?3, ?4
+           FROM outbound_messages WHERE id = ?2`,
+        )
+        .bind(
+          newId.event(),
+          outboundId,
+          JSON.stringify({ error: message }),
+          Date.now(),
+        )
+        .run();
+    }
+  } catch {
+    // Best effort: the watchdog is the final safety net.
+  }
+  log.warn("email.send_crashed", { outbound_id: outboundId, error: message });
 }
 
 function idempotencyResponse(outcome: IdempotentReply): Response {
@@ -635,6 +689,60 @@ export async function processScheduledSends(env: Env, ctx: ExecutionContext): Pr
         .run();
     }
   }
+}
+
+/// A send still in 'sending' after this long is considered abandoned. The
+/// provider round-trip plus persistence is bounded by seconds; the margin
+/// covers a slow provider without racing a healthy send.
+export const STUCK_SEND_MS = 10 * 60 * 1000;
+
+/**
+ * Cron watchdog: a row left in 'sending' (client disconnected before the
+ * worker finished, isolate evicted, unexpected crash) used to stay there
+ * forever. Mark it failed with a visible reason and an `email.failed` event
+ * so it shows up in Activity and can be retried under the same Idempotency-Key
+ * (checkIdempotencyKey releases failed rows).
+ */
+export async function reapStuckSends(env: Env, now = Date.now()): Promise<number> {
+  const cutoff = now - STUCK_SEND_MS;
+  const rows = await env.DB
+    .prepare(
+      `SELECT id, owner_id FROM outbound_messages
+       WHERE status = 'sending' AND sent_at IS NULL AND created_at < ?1
+       ORDER BY created_at
+       LIMIT 100`,
+    )
+    .bind(cutoff)
+    .all<{ id: string; owner_id: string }>();
+
+  let reaped = 0;
+  for (const row of rows.results ?? []) {
+    const message = "send did not finish (timed out or the worker stopped)";
+    const upd = await env.DB
+      .prepare(
+        `UPDATE outbound_messages SET status = 'failed', last_error = ?2
+         WHERE id = ?1 AND status = 'sending'`,
+      )
+      .bind(row.id, message)
+      .run();
+    if (!upd.meta.changes) continue;
+    reaped += 1;
+    await env.DB
+      .prepare(
+        `INSERT INTO events (id, owner_id, type, outbound_id, email_id, payload_json, created_at)
+         VALUES (?1, ?2, 'email.failed', ?3, ?3, ?4, ?5)`,
+      )
+      .bind(
+        newId.event(),
+        row.owner_id,
+        row.id,
+        JSON.stringify({ error: message }),
+        now,
+      )
+      .run();
+  }
+  if (reaped > 0) log.warn("email.reaped_stuck_sends", { count: reaped });
+  return reaped;
 }
 
 // Resend batch endpoint: array of email objects, ≤ 100, attachments + scheduled_at
