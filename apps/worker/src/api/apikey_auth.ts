@@ -2,8 +2,9 @@ import type { Env } from "../env";
 import { httpError } from "../http";
 import { sha256Hex } from "../utils/crypto";
 
-const TOKEN_PREFIX = "re_live_";
-const PREFIX_LEN = TOKEN_PREFIX.length + 4; // displayed prefix: "re_live_XXXX"
+const LIVE_PREFIX = "re_live_";
+const TEST_PREFIX = "re_test_";
+const PREFIX_LEN = LIVE_PREFIX.length + 4; // displayed prefix: "re_live_XXXX"
 
 const BASE62 = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789";
 
@@ -12,6 +13,8 @@ export interface ApiKeyAuth {
   key_id: string;
   scopes: string[];
   domain_scope: string[] | null;
+  /** Test keys record sends/events but never call the delivery provider. */
+  test_mode?: boolean;
 }
 
 export type ApiKeyResult = { kind: "ok"; auth: ApiKeyAuth } | { kind: "error"; response: Response };
@@ -22,10 +25,11 @@ interface CachedKey {
   hash: string;
   scopes: string[];
   domain_scope: string[] | null;
+  test_mode?: boolean;
   revoked: boolean;
 }
 
-export function newToken(): string {
+export function newToken(testMode = false): string {
   // Rejection-sample so every base62 character is uniform (bytes 248-255
   // would otherwise bias toward the first 8 characters of the alphabet).
   let s = "";
@@ -37,7 +41,7 @@ export function newToken(): string {
       if (b < 248) s += BASE62[b % 62];
     }
   }
-  return TOKEN_PREFIX + s;
+  return (testMode ? TEST_PREFIX : LIVE_PREFIX) + s;
 }
 
 export function tokenPrefix(token: string): string {
@@ -57,7 +61,10 @@ export async function authenticateApiKey(req: Request, env: Env): Promise<ApiKey
     return { kind: "error", response: httpError.missingApiKey() };
   }
   const token = auth.slice("Bearer ".length).trim();
-  if (!token.startsWith(TOKEN_PREFIX) || token.length < PREFIX_LEN + 6) {
+  if (
+    (!token.startsWith(LIVE_PREFIX) && !token.startsWith(TEST_PREFIX)) ||
+    token.length < PREFIX_LEN + 6
+  ) {
     return { kind: "error", response: httpError.unauthorized() };
   }
   const prefix = tokenPrefix(token);
@@ -67,7 +74,8 @@ export async function authenticateApiKey(req: Request, env: Env): Promise<ApiKey
   if (!row) {
     const dbRow = await env.DB
       .prepare(
-        `SELECT id, owner_id, key_hash, scopes_json, domain_scope_json, revoked_at
+        `SELECT id, owner_id, key_hash, scopes_json, domain_scope_json,
+                test_mode, revoked_at
          FROM api_keys WHERE prefix = ?1`,
       )
       .bind(prefix)
@@ -77,6 +85,7 @@ export async function authenticateApiKey(req: Request, env: Env): Promise<ApiKey
         key_hash: string;
         scopes_json: string;
         domain_scope_json: string | null;
+        test_mode: number;
         revoked_at: number | null;
       }>();
     if (!dbRow) {
@@ -88,6 +97,7 @@ export async function authenticateApiKey(req: Request, env: Env): Promise<ApiKey
       hash: dbRow.key_hash,
       scopes: JSON.parse(dbRow.scopes_json) as string[],
       domain_scope: dbRow.domain_scope_json ? (JSON.parse(dbRow.domain_scope_json) as string[]) : null,
+      test_mode: Boolean(dbRow.test_mode),
       revoked: dbRow.revoked_at != null,
     };
     await env.KV.put(`apikey:${prefix}`, JSON.stringify(row), { expirationTtl: 300 });
@@ -114,6 +124,7 @@ export async function authenticateApiKey(req: Request, env: Env): Promise<ApiKey
       key_id: row.id,
       scopes: row.scopes,
       domain_scope: row.domain_scope,
+      test_mode: Boolean(row.test_mode),
     },
   };
 }

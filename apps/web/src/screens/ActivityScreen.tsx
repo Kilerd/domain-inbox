@@ -349,9 +349,12 @@ function SendingPane() {
                   {rcptList(m.to)}
                 </td>
                 <td className="px-3 py-2.5">
-                  <Badge tone={STATUS_TONE[m.display_status] ?? "neutral"}>
-                    {labelForStatus(m.display_status)}
-                  </Badge>
+                  <span className="inline-flex items-center gap-1.5">
+                    <Badge tone={STATUS_TONE[m.display_status] ?? "neutral"}>
+                      {labelForStatus(m.display_status)}
+                    </Badge>
+                    {m.test_mode && <Badge tone="neutral">test</Badge>}
+                  </span>
                 </td>
                 <td className="truncate px-3 py-2.5">
                   {m.subject || <em className="italic text-zinc-400">(no subject)</em>}

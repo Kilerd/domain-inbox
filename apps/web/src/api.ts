@@ -167,6 +167,7 @@ export interface ApiKey {
   prefix: string;
   scopes: string[];
   domain_scope: string[] | null;
+  test_mode?: boolean;
   created_at: string;
   last_used_at: string | null;
   revoked_at: string | null;
@@ -368,6 +369,7 @@ export interface OutboundMessage {
   subject: string | null;
   template_id: string | null;
   api_key_id: string | null;
+  test_mode?: boolean;
   tracking: OutboundTracking;
 }
 
@@ -626,7 +628,12 @@ export const api = {
 
   // API Keys
   listApiKeys: () => fetchJson<ListResp<ApiKey>>("/api/v1/api-keys").then((r) => r.data),
-  createApiKey: (params: { name?: string; scopes?: string[]; domain_scope?: string[] }) =>
+  createApiKey: (params: {
+    name?: string;
+    scopes?: string[];
+    domain_scope?: string[];
+    test_mode?: boolean;
+  }) =>
     fetchJson<ApiKeyCreated>("/api/v1/api-keys", {
       method: "POST",
       body: JSON.stringify(params),

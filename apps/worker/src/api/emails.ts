@@ -88,7 +88,7 @@ export async function handleEmailSend(
   if (!key.scopes.includes("emails.send")) {
     return httpError.forbidden("API key lacks emails.send scope");
   }
-  if (!env.EMAIL) {
+  if (!key.test_mode && !env.EMAIL) {
     return httpError.internal(
       "send_email binding not configured (Workers Paid plan + verified domain required)",
       503,
@@ -173,9 +173,9 @@ export async function handleEmailSend(
     idempotency = { key: idempotencyKey, hash: requestHash, createdAt: now };
   }
 
-  // Abuse/cost guard: count every accepted send (including scheduled ones)
-  // against the owner's UTC-day budget. Replays returned above are free.
-  if (!(await consumeSendQuota(env, key.user_id, now))) {
+  // Abuse/cost guard: count every accepted live send (including scheduled
+  // ones) against the owner's UTC-day budget. Replays and test sends are free.
+  if (!key.test_mode && !(await consumeSendQuota(env, key.user_id, now))) {
     return httpError.rateLimit(
       `daily send limit reached (${sendDailyLimit(env)}/day, resets at 00:00 UTC)`,
     );
@@ -194,6 +194,9 @@ export async function handleEmailSend(
     }
     if (ts > now + 30_000) scheduledAt = ts;
   }
+  if (key.test_mode && scheduledAt) {
+    return httpError.validation("test-mode keys cannot schedule sends");
+  }
 
   // Pre-record so failures are observable. UNIQUE(owner_id, idempotency_key)
   // doubles as the atomic idempotency reservation: a concurrent duplicate
@@ -203,8 +206,9 @@ export async function handleEmailSend(
       .prepare(
         `INSERT INTO outbound_messages
            (id, owner_id, api_key_id, idempotency_key, idempotency_hash, status,
-            request_json, attempts, template_id, tracking_enabled, scheduled_at, created_at)
-         VALUES (?1, ?2, ?3, ?4, ?11, ?9, ?5, 0, ?6, ?7, ?10, ?8)`,
+            request_json, attempts, template_id, tracking_enabled, scheduled_at,
+            created_at, test_mode)
+         VALUES (?1, ?2, ?3, ?4, ?11, ?9, ?5, 0, ?6, ?7, ?10, ?8, ?12)`,
       )
       .bind(
         outboundId,
@@ -218,6 +222,7 @@ export async function handleEmailSend(
         scheduledAt ? "scheduled" : "sending",
         scheduledAt,
         idempotency?.hash ?? null,
+        key.test_mode ? 1 : 0,
       )
       .run();
   } catch (err) {
@@ -236,6 +241,10 @@ export async function handleEmailSend(
 
   if (scheduledAt) {
     return Response.json({ id: outboundId });
+  }
+
+  if (key.test_mode) {
+    return simulateTestSend(env, ctx, outboundId, key, body, prep, idempotency, now);
   }
 
   const send = executeSend(env, ctx, key.user_id, body, {
@@ -260,6 +269,118 @@ export async function handleEmailSend(
     return Response.json({ id: outboundId });
   }
   return send;
+}
+
+/**
+ * Test-mode send: record the row/event/webhook exactly like a real attempt,
+ * but never call the provider and never copy the mail into the inbox.
+ * Recipients with the local parts `bounced`, `complained` or `delivered`
+ * simulate those outcomes; everything else is `sent`.
+ */
+async function simulateTestSend(
+  env: Env,
+  ctx: ExecutionContext | undefined,
+  outboundId: string,
+  key: ApiKeyAuth,
+  body: SendEmailBody,
+  prep: PreparedSend,
+  idempotency: IdempotentSend | null,
+  now: number,
+): Promise<Response> {
+  const recipients = [...prep.to, ...prep.cc, ...prep.bcc].map((a) =>
+    a.addr.toLowerCase(),
+  );
+  const local = (addr: string) => addr.slice(0, addr.lastIndexOf("@"));
+
+  let status = "sent";
+  let eventType = "email.sent";
+  let bounceType: string | null = null;
+  let diagnostic: string | null = null;
+
+  if (recipients.some((a) => local(a) === "bounced")) {
+    status = "bounced";
+    eventType = "email.bounced";
+    bounceType = "hard";
+    diagnostic = "test-mode bounce";
+  } else if (recipients.some((a) => local(a) === "complained")) {
+    status = "complained";
+    eventType = "email.complained";
+    bounceType = "complaint";
+    diagnostic = "test-mode complaint";
+  } else if (recipients.some((a) => local(a) === "delivered")) {
+    status = "delivered";
+    eventType = "email.delivered";
+  }
+
+  await env.DB
+    .prepare(
+      `UPDATE outbound_messages
+       SET status = ?2, attempts = 1, sent_at = ?3, bounced_at = ?4,
+           bounce_type = ?5, bounce_diag = ?6
+       WHERE id = ?1`,
+    )
+    .bind(
+      outboundId,
+      status,
+      now,
+      bounceType ? now : null,
+      bounceType,
+      diagnostic,
+    )
+    .run();
+
+  const eventId = newId.event();
+  await env.DB
+    .prepare(
+      `INSERT INTO events
+         (id, owner_id, type, outbound_id, email_id, payload_json, created_at)
+       VALUES (?1, ?2, ?3, ?4, ?4, ?5, ?6)`,
+    )
+    .bind(
+      eventId,
+      key.user_id,
+      eventType,
+      outboundId,
+      JSON.stringify({
+        recipients,
+        error: null,
+        test_mode: true,
+      }),
+      now,
+    )
+    .run();
+
+  const dispatch = fanoutEvent(env, key.user_id, eventType, {
+    email_id: outboundId,
+    from: prep.from.addr,
+    to: prep.to.map((a) => a.addr),
+    subject: typeof body.subject === "string" ? body.subject : "",
+    last_error: null,
+    test_mode: true,
+  }, eventId);
+  if (ctx) ctx.waitUntil(dispatch);
+  else await dispatch;
+
+  if (idempotency) {
+    await cacheIdempotentSend(
+      env.KV,
+      key.user_id,
+      idempotency.key,
+      {
+        id: outboundId,
+        hash: idempotency.hash,
+        createdAt: idempotency.createdAt,
+      },
+      now,
+    );
+  }
+
+  log.info("email.test_mode", {
+    outbound_id: outboundId,
+    status,
+    recipients: recipients.length,
+  });
+  return Response.json({ id: outboundId });
 }
 
 /**

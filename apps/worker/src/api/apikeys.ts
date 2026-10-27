@@ -15,6 +15,7 @@ interface ApiKeyRow {
   prefix: string;
   scopes_json: string;
   domain_scope_json: string | null;
+  test_mode: number;
   last_used_at: number | null;
   created_at: number;
   revoked_at: number | null;
@@ -28,6 +29,7 @@ function shape(r: ApiKeyRow) {
     prefix: r.prefix,
     scopes: JSON.parse(r.scopes_json) as string[],
     domain_scope: r.domain_scope_json ? (JSON.parse(r.domain_scope_json) as string[]) : null,
+    test_mode: Boolean(r.test_mode),
     created_at: new Date(r.created_at).toISOString(),
     last_used_at: r.last_used_at ? new Date(r.last_used_at).toISOString() : null,
     revoked_at: r.revoked_at ? new Date(r.revoked_at).toISOString() : null,
@@ -56,7 +58,7 @@ async function listKeys(env: Env, user: AuthUser): Promise<Response> {
   const res = await env.DB
     .prepare(
       `SELECT id, owner_id, name, prefix, scopes_json, domain_scope_json,
-              last_used_at, created_at, revoked_at
+              test_mode, last_used_at, created_at, revoked_at
        FROM api_keys WHERE owner_id = ?1 ORDER BY created_at DESC`,
     )
     .bind(user.id)
@@ -68,7 +70,7 @@ async function listKeys(env: Env, user: AuthUser): Promise<Response> {
 }
 
 async function createKey(req: Request, env: Env, user: AuthUser): Promise<Response> {
-  let body: { name?: unknown; scopes?: unknown; domain_scope?: unknown };
+  let body: { name?: unknown; scopes?: unknown; domain_scope?: unknown; test_mode?: unknown };
   try {
     body = (await req.json()) as typeof body;
   } catch {
@@ -99,8 +101,9 @@ async function createKey(req: Request, env: Env, user: AuthUser): Promise<Respon
   const domainScope = Array.isArray(body.domain_scope)
     ? (body.domain_scope as string[])
     : null;
+  const testMode = body.test_mode === true;
 
-  const token = newToken();
+  const token = newToken(testMode);
   const prefix = tokenPrefix(token);
   const hash = await sha256Hex(token);
   const id = newId.apiKey();
@@ -108,8 +111,10 @@ async function createKey(req: Request, env: Env, user: AuthUser): Promise<Respon
 
   await env.DB
     .prepare(
-      `INSERT INTO api_keys (id, owner_id, name, prefix, key_hash, scopes_json, domain_scope_json, created_at)
-       VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)`,
+      `INSERT INTO api_keys
+         (id, owner_id, name, prefix, key_hash, scopes_json, domain_scope_json,
+          test_mode, created_at)
+       VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)`,
     )
     .bind(
       id,
@@ -119,6 +124,7 @@ async function createKey(req: Request, env: Env, user: AuthUser): Promise<Respon
       hash,
       JSON.stringify(scopes),
       domainScope ? JSON.stringify(domainScope) : null,
+      testMode ? 1 : 0,
       now,
     )
     .run();
@@ -131,6 +137,7 @@ async function createKey(req: Request, env: Env, user: AuthUser): Promise<Respon
       prefix,
       scopes,
       domain_scope: domainScope,
+      test_mode: testMode,
       created_at: new Date(now).toISOString(),
       token, // ONLY returned at creation time
     },
@@ -142,7 +149,7 @@ async function getKey(env: Env, user: AuthUser, id: string): Promise<Response> {
   const row = await env.DB
     .prepare(
       `SELECT id, owner_id, name, prefix, scopes_json, domain_scope_json,
-              last_used_at, created_at, revoked_at
+              test_mode, last_used_at, created_at, revoked_at
        FROM api_keys WHERE id = ?1 AND owner_id = ?2`,
     )
     .bind(id, user.id)

@@ -31,6 +31,7 @@ export interface OutboundRow {
   last_clicked_at: number | null;
   api_key_id: string | null;
   idempotency_key: string | null;
+  test_mode: number;
   request_json: string;
 }
 
@@ -38,7 +39,7 @@ const COLUMNS = `om.id, om.status, om.created_at, om.sent_at, om.scheduled_at,
   om.bounced_at, om.bounce_type, om.bounce_diag, om.last_error,
   om.template_id, om.tracking_enabled, om.open_count, om.click_count,
   om.first_opened_at, om.last_opened_at, om.first_clicked_at, om.last_clicked_at,
-  om.api_key_id, om.idempotency_key, om.request_json`;
+  om.api_key_id, om.idempotency_key, om.test_mode, om.request_json`;
 
 const iso = (ms: number) => new Date(ms).toISOString();
 const isoOrNull = (ms: number | null) => (ms ? iso(ms) : null);
@@ -77,6 +78,7 @@ interface OutboundBase {
   subject: unknown;
   template_id: string | null;
   api_key_id: string | null;
+  test_mode: boolean;
   tracking: {
     enabled: boolean;
     open_count: number;
@@ -118,6 +120,7 @@ export function shapeOutbound(r: OutboundRow, variant: OutboundShape) {
     subject: req.subject ?? null,
     template_id: r.template_id,
     api_key_id: r.api_key_id,
+    test_mode: Boolean(r.test_mode),
     tracking: {
       enabled: Boolean(r.tracking_enabled),
       open_count: r.open_count,

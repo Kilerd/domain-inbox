@@ -26,6 +26,7 @@ const row: OutboundRow = {
   last_clicked_at: 1_800_000_003_000,
   api_key_id: null,
   idempotency_key: "idem-1",
+  test_mode: 0,
   request_json: JSON.stringify({
     from: "hello@example.test",
     to: ["a@b.test"],

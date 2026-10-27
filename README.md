@@ -65,6 +65,15 @@ Compatibility is end-to-end verified by `scripts/resend-compat-smoke.mjs`
 `scripts/webhook-signature-check.mjs` (cross-checks signatures with the
 official Svix SDK).
 
+### Test mode
+
+Tick *Test mode* when creating an API key (or send `"test_mode": true`); the
+token starts with `re_test_`. `POST /api/v1/emails` then records the outbound
+row, event and webhooks exactly like a real send, but never calls the provider
+or copies the mail into the inbox. Use `delivered@…`, `bounced@…` or
+`complained@…` as recipients to simulate those outcomes. Test sends do not
+consume the daily send quota; scheduled sends are rejected for test keys.
+
 ### Receiving API
 
 Inbound mail is readable by programs with an `emails.read` key (the default
