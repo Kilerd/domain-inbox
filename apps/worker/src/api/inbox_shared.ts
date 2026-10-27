@@ -44,6 +44,14 @@ export interface AttachmentRow {
   is_inline: number;
 }
 
+/**
+ * SQL fragment for "this thread has received mail". The Inbox is a received
+ * mailbox: a thread that only ever went out (verification sends, forwards)
+ * belongs in Sent/All, not here. Expects the threads table to be aliased `t`.
+ */
+export const HAS_INBOUND_SQL =
+  "EXISTS (SELECT 1 FROM messages m WHERE m.thread_id = t.id AND m.direction = 'inbound' AND m.parse_status != 'duplicate')";
+
 export function jsonArr(s: string | null): string[] {
   if (!s) return [];
   try {

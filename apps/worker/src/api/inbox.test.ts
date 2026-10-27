@@ -34,6 +34,7 @@ function seed() {
     INSERT INTO threads (id,owner_id,domain_id,subject_normalized,participants_json,last_message_at,first_message_at,message_count,unread_count,flags_bitmap) VALUES
       ('t_1','u_1','d_1','one','[]',0,0,2,2,0),
       ('t_2','u_1','d_1','two','[]',0,0,3,1,0),
+      ('t_out','u_1','d_1','outbound only','[]',0,0,1,0,0),
       ('t_other','u_2','d_2','other','[]',0,0,1,1,0);
   `);
   const insertMessage = db.prepare(`
@@ -48,6 +49,7 @@ function seed() {
     ["m_read", "t_2", "u_1", "d_1", "a_1", "<r@x>", "inbound", 1, "parsed"],
     ["m_dup", "t_2", "u_1", "d_1", "a_1", "<d@x>", "inbound", 0, "duplicate"],
     ["m_out", "t_2", "u_1", "d_1", "a_1", "<o@x>", "outbound", 0, "parsed"],
+    ["m_out_only", "t_out", "u_1", "d_1", "a_1", "<oo@x>", "outbound", 1, "parsed"],
     ["m_other", "t_other", "u_2", "d_2", null, "<x@x>", "inbound", 0, "parsed"],
   ];
   for (const [id, thread, owner, domain, alias, msgid, dir, flags, status] of rows) {
@@ -93,6 +95,28 @@ describe("alias unread is derived from messages", () => {
     expect((json.data as Array<Record<string, unknown>>)[0]).toMatchObject({
       address: "hello@example.test",
       unread_count: 1,
+    });
+  });
+});
+
+describe("inbox is received mail only", () => {
+  it("keeps outbound-only threads out of inbox but in sent/all", async () => {
+    const ids = async (view: string) => {
+      const { status, json } = await call(`/api/inbox/threads?view=${view}&limit=10`);
+      expect(status).toBe(200);
+      return (json.threads as Array<{ id: string }>).map((t) => t.id).sort();
+    };
+    expect(await ids("inbox")).toEqual(["t_1", "t_2"]);
+    expect(await ids("sent")).toEqual(["t_2", "t_out"]);
+    expect(await ids("all")).toEqual(["t_1", "t_2", "t_out"]);
+  });
+
+  it("mirrors the inbox scope in the domain thread count", async () => {
+    const { status, json } = await call("/api/inbox/domains");
+    expect(status).toBe(200);
+    expect((json.data as Array<Record<string, unknown>>)[0]).toMatchObject({
+      domain: "example.test",
+      thread_count: 2,
     });
   });
 });

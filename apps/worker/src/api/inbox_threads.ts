@@ -4,6 +4,7 @@ import { recountThread } from "../email/counters";
 import { httpError } from "../http";
 import { FLAG_ARCHIVED, FLAG_READ, FLAG_SPAM, FLAG_STARRED, FLAG_TRASH } from "../utils/flags";
 import {
+  HAS_INBOUND_SQL,
   messageShape,
   threadShape,
   type AttachmentRow,
@@ -19,10 +20,14 @@ interface ViewFilter {
 }
 
 function viewClause(view: View): ViewFilter {
-  // inbox = not archived, not trash, not spam (the "default" mailbox view)
+  // inbox = received mail that is not archived/trash/spam. A thread enters
+  // the inbox when something arrives; pure outbound threads live in Sent/All.
   switch (view) {
     case "unread":
-      return { where: "t.unread_count > 0 AND (t.flags_bitmap & ?) = 0", binds: [FLAG_TRASH | FLAG_SPAM] };
+      return {
+        where: `t.unread_count > 0 AND (t.flags_bitmap & ?) = 0 AND ${HAS_INBOUND_SQL}`,
+        binds: [FLAG_TRASH | FLAG_SPAM],
+      };
     case "starred":
       return { where: "(t.flags_bitmap & ?) != 0", binds: [FLAG_STARRED] };
     case "archived":
@@ -34,14 +39,17 @@ function viewClause(view: View): ViewFilter {
     case "sent":
       return {
         where:
-          "EXISTS (SELECT 1 FROM messages m WHERE m.thread_id = t.id AND m.direction = 'outbound')",
+          "EXISTS (SELECT 1 FROM messages m WHERE m.thread_id = t.id AND m.direction = 'outbound' AND m.parse_status != 'duplicate')",
         binds: [],
       };
     case "all":
       return { where: "1=1", binds: [] };
     case "inbox":
     default:
-      return { where: "(t.flags_bitmap & ?) = 0", binds: [FLAG_ARCHIVED | FLAG_TRASH | FLAG_SPAM] };
+      return {
+        where: `(t.flags_bitmap & ?) = 0 AND ${HAS_INBOUND_SQL}`,
+        binds: [FLAG_ARCHIVED | FLAG_TRASH | FLAG_SPAM],
+      };
   }
 }
 

@@ -2,21 +2,24 @@ import type { AuthUser } from "../auth";
 import type { Env } from "../env";
 import { httpError } from "../http";
 import { FLAG_ARCHIVED, FLAG_AUXILIARY, FLAG_READ, FLAG_SPAM, FLAG_TRASH } from "../utils/flags";
+import { HAS_INBOUND_SQL } from "./inbox_shared";
 
 export async function listInboxDomains(env: Env, user: AuthUser): Promise<Response> {
-  // Must mirror viewClause("inbox"): archived threads don't appear in the
-  // Inbox, so an unread message inside an archived thread must not keep the
-  // Inbox badge lit. (Archiving a conversation doesn't mark it read.)
+  // Must mirror viewClause("inbox"): archived threads and outbound-only
+  // threads don't appear in the Inbox, so neither should light the badge or
+  // count toward thread_count.
   const res = await env.DB
     .prepare(
       `SELECT d.id, d.domain,
               (SELECT COUNT(*) FROM threads t
                  WHERE t.owner_id = ?1 AND t.domain_id = d.id
                    AND (t.flags_bitmap & ?2) = 0
+                   AND ${HAS_INBOUND_SQL}
                    AND t.unread_count > 0) AS unread_count,
               (SELECT COUNT(*) FROM threads t
                  WHERE t.owner_id = ?1 AND t.domain_id = d.id
-                   AND (t.flags_bitmap & ?2) = 0) AS thread_count
+                   AND (t.flags_bitmap & ?2) = 0
+                   AND ${HAS_INBOUND_SQL}) AS thread_count
        FROM domains d
        WHERE d.owner_id = ?1
        ORDER BY d.created_at DESC`,
