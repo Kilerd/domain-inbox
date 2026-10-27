@@ -5,6 +5,7 @@ import { domainOf, splitAddress } from "../utils/address";
 import { FLAG_AUXILIARY } from "../utils/flags";
 import { tryProcessBounce } from "./bounce";
 import { parseAndEnrichMessage } from "./parse";
+import { sendPushToOwner } from "../api/push";
 import { applyInboundRules, authFailureSpam } from "./rules";
 import { indexMessageForSearch } from "./search_index";
 import { assignThread } from "./thread";
@@ -282,8 +283,16 @@ export async function handleInboundEmail(
           .run();
       }
 
-      // Vacation reply last: never for bounced/automated mail or spam.
+      // Push + vacation last: never for bounced/automated mail or spam.
       if (!bounce && !spam) {
+        _ctx.waitUntil(
+          sendPushToOwner(env, owner.ownerId, {
+            title: fromAddr,
+            body: meta.subject ?? "(no subject)",
+            url: "/inbox",
+            tag: meta.thread_id ?? messageId,
+          }),
+        );
         _ctx.waitUntil(
           maybeAutoReply(
             env,

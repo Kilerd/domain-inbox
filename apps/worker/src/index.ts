@@ -18,6 +18,7 @@ import {
 import { releaseExpiredIdempotencyKeys } from "./api/idempotency";
 import { handleImgProxy } from "./api/img_proxy";
 import { handleInbox } from "./api/inbox";
+import { handlePush } from "./api/push";
 import { handleReceiving } from "./api/receiving";
 import { handleReports } from "./api/reports";
 import { handleSuppressions } from "./api/suppressions";
@@ -330,6 +331,9 @@ async function tryUser(
   }
   if (url.pathname === "/api/v1/reports" || url.pathname.startsWith("/api/v1/reports/")) {
     return handleReports(url, req, env, user);
+  }
+  if (url.pathname === "/api/v1/push" || url.pathname.startsWith("/api/v1/push/")) {
+    return handlePush(url, req, env, user);
   }
   if (
     url.pathname === "/api/v1/suppressions" ||

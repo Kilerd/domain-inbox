@@ -18,6 +18,9 @@ export interface Env {
   DEV_USER_TOKEN?: string; // when set + matching `X-Dev-Auth` header → dev backdoor active
   OWNER_EMAIL?: string; // first boot: only this address may bootstrap the owner
   SEND_DAILY_LIMIT?: string; // per-owner outbound cap per UTC day (default 1000)
+  VAPID_PUBLIC_KEY?: string; // Web Push application server key (base64url)
+  VAPID_PRIVATE_KEY?: string; // Web Push VAPID private key (JWK d, base64url)
+  VAPID_SUBJECT?: string; // mailto:… contact for the VAPID JWT
 
   // Secrets (set via `wrangler secret put`)
   CLOUDFLARE_API_TOKEN?: string;

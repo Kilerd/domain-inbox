@@ -23,6 +23,11 @@ web UI. A free Cloudflare account is enough to get started.
 - **Deliverability reports.** DMARC aggregate (XML) and TLS-RPT (JSON) reports
   arriving at your domains are parsed into a dashboard — point `rua=` and the
   `_smtp._tls` record at the inbox and the Reports screen fills itself.
+- **Installable PWA with Web Push.** The SPA ships a manifest and service
+  worker; install it from the browser and press the bell in the header to get
+  a system notification for new mail on every subscribed device (RFC 8291
+  encryption, VAPID-signed). Push is disabled until the three `VAPID_*`
+  secrets are set.
 - **All on Cloudflare.** D1 for metadata, R2 for raw MIME, KV for fast token
   lookup. No external services.
 

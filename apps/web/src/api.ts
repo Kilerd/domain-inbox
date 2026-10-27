@@ -283,6 +283,20 @@ export interface TlsSummary {
   reports: TlsReportSummary[];
 }
 
+// ── Web Push ──────────────────────────────────────────────────────────────
+
+export interface PushKey {
+  object: "push_key";
+  enabled: boolean;
+  public_key: string | null;
+}
+
+export interface PushSubscriptionPayload {
+  endpoint: string;
+  expirationTime: number | null;
+  keys: { p256dh: string; auth: string };
+}
+
 // ── Members ───────────────────────────────────────────────────────────────
 
 export interface Member {
@@ -711,6 +725,19 @@ export const api = {
       `/api/v1/reports/tls-rpt${search ? `?${search}` : ""}`,
     );
   },
+
+  // Web Push
+  getPushKey: () => fetchJson<PushKey>("/api/v1/push/key"),
+  subscribePush: (sub: PushSubscriptionPayload) =>
+    fetchJson<{ object: "push_subscription"; endpoint: string; subscribed: true }>(
+      "/api/v1/push/subscribe",
+      { method: "POST", body: JSON.stringify(sub) },
+    ),
+  unsubscribePush: (endpoint: string) =>
+    fetchJson<{ object: "push_subscription"; endpoint: string; deleted: true }>(
+      "/api/v1/push/subscribe",
+      { method: "DELETE", body: JSON.stringify({ endpoint }) },
+    ),
 
   // Webhooks
   listWebhooks: () =>

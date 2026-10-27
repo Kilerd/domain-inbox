@@ -21,6 +21,7 @@ const PREFIX = {
   dmarcReport: "dmr_",
   dmarcRecord: "dmrec_",
   tlsRpt: "tlsr_",
+  pushSubscription: "psub_",
 } as const;
 
 type IdKind = keyof typeof PREFIX;
@@ -48,4 +49,5 @@ export const newId = {
   dmarcReport: () => gen("dmarcReport"),
   dmarcRecord: () => gen("dmarcRecord"),
   tlsRpt: () => gen("tlsRpt"),
+  pushSubscription: () => gen("pushSubscription"),
 };

@@ -169,6 +169,19 @@ pnpm exec wrangler secret put DEV_USER_TOKEN --env dev
 pnpm exec wrangler secret put CLOUDFLARE_API_TOKEN --env dev
 ```
 
+# Optional: Web Push (browser notifications). All three values are required;
+# without them the bell in the header stays hidden and the API reports
+# `push_key.enabled = false`. Generate a P-256 keypair once and keep the
+# private key out of git:
+#   node --input-type=module -e '…'   # see scripts/vapid.mjs in the repo root
+pnpm exec wrangler secret put VAPID_PUBLIC_KEY --env dev   # base64url, 87 chars
+pnpm exec wrangler secret put VAPID_PRIVATE_KEY --env dev  # base64url JWK "d"
+pnpm exec wrangler secret put VAPID_SUBJECT --env dev      # mailto:ops@example.com
+```
+
+Web Push subscriptions live in D1 (`push_subscriptions`, migration `0016`);
+expired endpoints (404/410 from the push service) are removed on delivery.
+
 There is no webhook signing secret to set: webhook secrets are generated
 **per endpoint** when you create the endpoint in the UI / API, and stored
 as rows in D1.

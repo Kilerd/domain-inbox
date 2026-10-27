@@ -14,6 +14,7 @@ import {
 } from "lucide-react";
 import type { ReactNode } from "react";
 import { api } from "@/api";
+import { PushToggle } from "@/components/PushToggle";
 import { FOCUS_RING } from "@/components/ui";
 import { useTheme, type Theme } from "@/lib/theme";
 import { cn } from "@/lib/utils";
@@ -108,6 +109,7 @@ export function AppShell({ children }: { children: ReactNode }) {
         })}
         <div className="ml-auto flex shrink-0 items-center gap-2 text-xs text-zinc-500">
           <span className="hidden lg:inline">{me.data?.email}</span>
+          <PushToggle />
           <ThemeToggle />
           <button
             type="button"
