@@ -1,5 +1,13 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { ExternalLink, Globe, Inbox, RefreshCw, Send, Trash2 } from "lucide-react";
+import {
+  ExternalLink,
+  Globe,
+  Inbox,
+  RefreshCw,
+  Send,
+  Trash2,
+  Wand2,
+} from "lucide-react";
 import { useState } from "react";
 import { api, ApiError, type Domain } from "@/api";
 import { Badge, Button, EmptyState, ErrorText, Input, Panel } from "@/components/ui";
@@ -9,6 +17,11 @@ import { cn } from "@/lib/utils";
 export function DomainsTab() {
   const qc = useQueryClient();
   const domains = useQuery({ queryKey: ["domains"], queryFn: api.listDomains });
+  const caps = useQuery({
+    queryKey: ["domain-capabilities"],
+    queryFn: api.getDomainCapabilities,
+    staleTime: 60_000,
+  });
   const [name, setName] = useState("");
   const [err, setErr] = useState<string | null>(null);
 
@@ -58,6 +71,16 @@ export function DomainsTab() {
             Auto-config skipped: {createMut.data.auto_config_error}
           </p>
         )}
+        {caps.data && !caps.data.auto_config.available && (
+          <p className="mt-2 text-xs text-zinc-500">
+            One-click setup is off. Set{" "}
+            <code className="rounded bg-zinc-100 px-1 dark:bg-zinc-800">
+              CLOUDFLARE_API_TOKEN
+            </code>{" "}
+            (Zone:Read + Email Routing Rules:Edit) as a Worker secret to let this
+            deployment create the routing catch-all for you.
+          </p>
+        )}
       </Panel>
 
       <Panel
@@ -69,18 +92,34 @@ export function DomainsTab() {
           <EmptyState icon={Globe} className="py-6">No domains yet.</EmptyState>
         )}
         <div className="space-y-2">
-          {domains.data?.map((d) => <DomainRow key={d.id} domain={d} />)}
+          {domains.data?.map((d) => (
+            <DomainRow
+              key={d.id}
+              domain={d}
+              autoConfigAvailable={caps.data?.auto_config.available ?? false}
+            />
+          ))}
         </div>
       </Panel>
     </div>
   );
 }
 
-function DomainRow({ domain }: { domain: Domain }) {
+function DomainRow({
+  domain,
+  autoConfigAvailable,
+}: {
+  domain: Domain;
+  autoConfigAvailable: boolean;
+}) {
   const qc = useQueryClient();
   const { openCompose } = useCompose();
   const me = useQuery({ queryKey: ["me"], queryFn: api.me });
 
+  const autoConfigMut = useMutation({
+    mutationFn: () => api.autoConfigureDomain(domain.id),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ["domains"] }),
+  });
   const verifyMut = useMutation({
     mutationFn: () => api.verifyDomain(domain.id),
     onSuccess: () => qc.invalidateQueries({ queryKey: ["domains"] }),
@@ -127,7 +166,23 @@ function DomainRow({ domain }: { domain: Domain }) {
             send {domain.send_status}
           </Badge>
         </div>
-        <div className="ml-auto flex items-center gap-2">
+        <div className="ml-auto flex flex-wrap items-center gap-2">
+          {autoConfigAvailable && (
+            <Button
+              variant="secondary"
+              onClick={() => autoConfigMut.mutate()}
+              disabled={autoConfigMut.isPending}
+              title="Create the Email Routing catch-all via the Cloudflare API"
+            >
+              <Wand2
+                className={cn(
+                  "h-3 w-3",
+                  autoConfigMut.isPending && "animate-pulse",
+                )}
+              />
+              Auto-configure
+            </Button>
+          )}
           <Button
             variant="secondary"
             onClick={sendTest}
@@ -162,6 +217,33 @@ function DomainRow({ domain }: { domain: Domain }) {
           </Button>
         </div>
       </header>
+      {autoConfigMut.data?.auto_configured && (
+        <p className="border-t border-zinc-100 px-3 py-2 text-xs text-emerald-600 dark:border-zinc-800 dark:text-emerald-400">
+          ✓ Email Routing catch-all configured.
+        </p>
+      )}
+      {autoConfigMut.data && !autoConfigMut.data.auto_configured && (
+        <div className="border-t border-zinc-100 px-3 py-2 text-xs text-amber-600 dark:border-zinc-800 dark:text-amber-400">
+          <p className="font-medium">Auto-config stopped:</p>
+          {(
+            autoConfigMut.data.auto_config_steps?.filter((s) => !s.ok) ?? []
+          ).map((s) => (
+            <p key={s.step} className="mt-0.5 font-mono text-[11px]">
+              {s.step}: {s.detail}
+            </p>
+          ))}
+          {!autoConfigMut.data.auto_config_steps?.some((s) => !s.ok) && (
+            <p className="mt-0.5">
+              {autoConfigMut.data.auto_config_error ?? "Unknown error."}
+            </p>
+          )}
+        </div>
+      )}
+      {autoConfigMut.error && (
+        <p className="border-t border-zinc-100 px-3 py-2 text-xs text-red-600 dark:border-zinc-800 dark:text-red-400">
+          {String(autoConfigMut.error)}
+        </p>
+      )}
       {showHint && <DomainHint domain={domain} />}
     </article>
   );

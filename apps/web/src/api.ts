@@ -141,6 +141,21 @@ export interface Domain {
   records: DnsRecord[];
   auto_configured?: boolean;
   auto_config_error?: string | null;
+  auto_config_steps?: AutoConfigStep[];
+}
+
+export interface AutoConfigStep {
+  step: string;
+  ok: boolean;
+  detail?: string;
+}
+
+export interface DomainCapabilities {
+  object: "capabilities";
+  auto_config: {
+    available: boolean;
+    worker_name: string | null;
+  };
 }
 
 // ── API Keys ──────────────────────────────────────────────────────────────
@@ -597,6 +612,12 @@ export const api = {
     }),
   verifyDomain: (idOrName: string) =>
     fetchJson<Domain>(`/api/v1/domains/${idOrName}/verify`, { method: "POST" }),
+  getDomainCapabilities: () =>
+    fetchJson<DomainCapabilities>("/api/v1/domains/capabilities"),
+  autoConfigureDomain: (idOrName: string) =>
+    fetchJson<Domain>(`/api/v1/domains/${idOrName}/auto-configure`, {
+      method: "POST",
+    }),
   deleteDomain: (idOrName: string) =>
     fetchJson<{ object: "domain"; id: string; deleted: true }>(
       `/api/v1/domains/${idOrName}`,

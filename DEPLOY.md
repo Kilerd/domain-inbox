@@ -162,8 +162,9 @@ cd apps/worker
 # a matching `X-Dev-Auth` header. Never set this on production.
 pnpm exec wrangler secret put DEV_USER_TOKEN --env dev
 
-# Optional: lets the SPA's "Settings → Add domain" auto-enable
-# Email Routing / DNS on new zones. Token scopes: Zone:Read +
+# Optional: enables one-click onboarding. "Add domain" auto-configures new
+# zones, and existing rows get an "Auto-configure" button (zone lookup →
+# Email Routing enabled → catch-all → this Worker). Token scopes: Zone:Read +
 # Zone:Email Routing Edit.
 pnpm exec wrangler secret put CLOUDFLARE_API_TOKEN --env dev
 ```

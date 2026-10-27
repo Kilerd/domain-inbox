@@ -44,7 +44,26 @@ export async function getZoneId(token: string, domain: string): Promise<string> 
     `/zones?name=${encodeURIComponent(domain)}&per_page=1`,
   );
   if (!list.length) throw new Error(`zone ${domain} not found on Cloudflare`);
-  return list[0]!.id;
+  const zone = list[0]!;
+  if (zone.status !== "active") {
+    throw new Error(
+      `zone ${domain} is ${zone.status}; activate the zone on Cloudflare first`,
+    );
+  }
+  return zone.id;
+}
+
+export interface RoutingSettings {
+  enabled: boolean;
+  status?: string;
+}
+
+/** Current Email Routing state for a zone (idempotent onboarding). */
+export async function getRoutingSettings(
+  token: string,
+  zoneId: string,
+): Promise<RoutingSettings> {
+  return cf<RoutingSettings>(token, `/zones/${zoneId}/email/routing`);
 }
 
 export async function enableRouting(token: string, zoneId: string): Promise<void> {

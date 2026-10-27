@@ -1,6 +1,7 @@
 import type { AuthUser } from "../auth";
 import {
   enableRouting,
+  getRoutingSettings,
   getZoneId,
   setCatchAllToWorker,
 } from "../cf/email_routing";
@@ -42,6 +43,85 @@ function shape(row: DomainRow, records: ExpectedRecord[]) {
   };
 }
 
+export interface AutoConfigStep {
+  step: string;
+  ok: boolean;
+  detail?: string;
+}
+
+interface AutoConfigResult {
+  ok: boolean;
+  steps: AutoConfigStep[];
+  error: string | null;
+  zoneId: string | null;
+}
+
+function errText(err: unknown): string {
+  return (err as Error)?.message ?? String(err);
+}
+
+/**
+ * Best-effort one-click onboarding through the Cloudflare API:
+ * zone lookup → Email Routing enabled → catch-all to this Worker → DB marker.
+ * Each step is reported so the UI can show exactly where it stopped.
+ */
+async function autoConfigureDomain(
+  env: Env,
+  domainId: string,
+  name: string,
+): Promise<AutoConfigResult> {
+  const token = env.CLOUDFLARE_API_TOKEN!;
+  const worker = env.WORKER_NAME!;
+  const steps: AutoConfigStep[] = [];
+
+  let zoneId: string;
+  try {
+    zoneId = await getZoneId(token, name);
+    steps.push({ step: "zone", ok: true, detail: zoneId });
+  } catch (err) {
+    const error = errText(err);
+    steps.push({ step: "zone", ok: false, detail: error });
+    return { ok: false, steps, error, zoneId: null };
+  }
+
+  try {
+    const settings = await getRoutingSettings(token, zoneId);
+    if (settings.enabled) {
+      steps.push({ step: "routing", ok: true, detail: "already enabled" });
+    } else {
+      await enableRouting(token, zoneId);
+      steps.push({ step: "routing", ok: true, detail: "enabled" });
+    }
+  } catch (err) {
+    const error = errText(err);
+    steps.push({ step: "routing", ok: false, detail: error });
+    return { ok: false, steps, error, zoneId };
+  }
+
+  try {
+    await setCatchAllToWorker(token, zoneId, worker);
+    steps.push({ step: "catch-all", ok: true, detail: worker });
+  } catch (err) {
+    const error = errText(err);
+    steps.push({ step: "catch-all", ok: false, detail: error });
+    return { ok: false, steps, error, zoneId };
+  }
+
+  try {
+    await env.DB
+      .prepare(`UPDATE domains SET email_routing_rule_id = 'catch-all' WHERE id = ?1`)
+      .bind(domainId)
+      .run();
+    steps.push({ step: "database", ok: true });
+  } catch (err) {
+    const error = errText(err);
+    steps.push({ step: "database", ok: false, detail: error });
+    return { ok: false, steps, error, zoneId };
+  }
+
+  return { ok: true, steps, error: null, zoneId };
+}
+
 export async function handleDomains(
   url: URL,
   req: Request,
@@ -53,6 +133,19 @@ export async function handleDomains(
 
   if ((path === "" || path === "/") && req.method === "GET") return listDomains(env, user);
   if ((path === "" || path === "/") && req.method === "POST") return createDomain(req, env, user, ctx);
+
+  if (path === "/capabilities" && req.method === "GET") {
+    return Response.json({
+      object: "capabilities",
+      auto_config: {
+        available: Boolean(env.CLOUDFLARE_API_TOKEN && env.WORKER_NAME),
+        worker_name: env.WORKER_NAME ?? null,
+      },
+    });
+  }
+
+  const ac = path.match(/^\/([^/]+)\/auto-configure$/);
+  if (ac && req.method === "POST") return autoConfigureEndpoint(env, user, ac[1]!);
 
   const m = path.match(/^\/([^/]+)$/);
   if (m && req.method === "GET") return getDomain(env, user, m[1]!);
@@ -123,24 +216,27 @@ async function createDomain(
     .run();
 
   // Best-effort CF Email Routing auto-config. Failures are logged but don't
-  // fail the request — user can configure manually via the dashboard.
+  // fail the request — the user can configure manually via the dashboard.
   let autoConfigured = false;
   let autoConfigError: string | null = null;
+  let autoConfigSteps: AutoConfigStep[] = [];
   if (env.CLOUDFLARE_API_TOKEN && env.WORKER_NAME) {
-    try {
-      const zoneId = await getZoneId(env.CLOUDFLARE_API_TOKEN, name);
-      await enableRouting(env.CLOUDFLARE_API_TOKEN, zoneId);
-      await setCatchAllToWorker(env.CLOUDFLARE_API_TOKEN, zoneId, env.WORKER_NAME);
-      await env.DB
-        .prepare(`UPDATE domains SET email_routing_rule_id = 'catch-all' WHERE id = ?1`)
-        .bind(id)
-        .run();
-      autoConfigured = true;
-      log.info("domain.auto_configured", { domain: name, zone_id: zoneId });
-    } catch (err) {
-      autoConfigError = (err as Error).message;
-      log.warn("domain.auto_config_failed", { domain: name, error: autoConfigError });
+    const result = await autoConfigureDomain(env, id, name);
+    autoConfigured = result.ok;
+    autoConfigError = result.error;
+    autoConfigSteps = result.steps;
+    if (result.ok) {
+      log.info("domain.auto_configured", { domain: name });
+    } else {
+      log.warn("domain.auto_config_failed", {
+        domain: name,
+        error: result.error,
+        steps: result.steps,
+      });
     }
+  } else {
+    autoConfigError =
+      "CLOUDFLARE_API_TOKEN is not configured; configure Email Routing manually";
   }
 
   const row: DomainRow = {
@@ -164,9 +260,39 @@ async function createDomain(
       ...shape(row, expectedRecords(name)),
       auto_configured: autoConfigured,
       auto_config_error: autoConfigError,
+      auto_config_steps: autoConfigSteps,
     },
     { status: 201 },
   );
+}
+
+async function autoConfigureEndpoint(
+  env: Env,
+  user: AuthUser,
+  idOrName: string,
+): Promise<Response> {
+  if (!env.CLOUDFLARE_API_TOKEN || !env.WORKER_NAME) {
+    return httpError.internal(
+      "CLOUDFLARE_API_TOKEN is not configured; set the secret and redeploy",
+      503,
+    );
+  }
+  const row = await fetchDomain(env, user, idOrName);
+  if (!row) return httpError.notFound(`domain ${idOrName} not found`);
+
+  const result = await autoConfigureDomain(env, row.id, row.domain);
+  log.info("domain.auto_configure_run", {
+    domain: row.domain,
+    ok: result.ok,
+    steps: result.steps,
+  });
+  const records = await discoverRecords(row.domain);
+  return Response.json({
+    ...shape(row, records),
+    auto_configured: result.ok,
+    auto_config_error: result.error,
+    auto_config_steps: result.steps,
+  });
 }
 
 async function getDomain(env: Env, user: AuthUser, idOrName: string): Promise<Response> {
