@@ -3,6 +3,7 @@ import type { Env } from "../env";
 import { newId } from "../ids";
 import { sha256Hex } from "../utils/crypto";
 import { log } from "../utils/log";
+import { processReportAttachments } from "./reports";
 
 interface ParsedAddress {
   address?: string;
@@ -228,6 +229,14 @@ export async function parseAndEnrichMessage(env: Env, messageId: string): Promis
         sha,
       )
       .run();
+  }
+
+  // DMARC/TLS-RPT report attachments: parse and store aggregates. A bad
+  // report must never make the underlying message fail to parse.
+  try {
+    await processReportAttachments(env, row.owner_id, attachments);
+  } catch (err) {
+    log.warn("report.process_failed", { msg_id: messageId, error: String(err) });
   }
 
   // Flip to 'parsed' only after attachment rows exist: a crash mid-loop

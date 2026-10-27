@@ -57,6 +57,10 @@ export function autoReplySuppressed(rawEml: string, from: string, to: string): b
   if (/^list-id:/im.test(rawEml)) return true;
   if (/^precedence:\s*(bulk|list|junk)/im.test(rawEml)) return true;
   if (/^x-auto-response-suppress:/im.test(rawEml)) return true;
+  // DMARC aggregate and TLS-RPT reports are machine mail, not correspondents.
+  if (/^subject:\s*(report domain|report-id|dmarc|tls-?rpt)/im.test(rawEml)) {
+    return true;
+  }
   return false;
 }
 

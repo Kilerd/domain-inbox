@@ -200,6 +200,73 @@ export interface VacationSettings {
   updated_at: string | null;
 }
 
+// ── Deliverability reports ────────────────────────────────────────────────
+
+export interface DmarcDomainStat {
+  domain: string;
+  reports: number;
+  messages: number;
+  passed: number;
+  failed: number;
+  quarantined: number;
+  rejected: number;
+  last_report_at: string | null;
+}
+
+export interface DmarcTimeseriesPoint {
+  day: string;
+  messages: number;
+  failed: number;
+  quarantined: number;
+  rejected: number;
+}
+
+export interface DmarcReportSummary {
+  id: string;
+  domain: string;
+  org_name: string;
+  report_id: string;
+  date_begin: string | null;
+  date_end: string | null;
+  messages: number;
+  failed: number;
+}
+
+export interface DmarcSummary {
+  object: "list";
+  days: number;
+  data: DmarcDomainStat[];
+  timeseries: DmarcTimeseriesPoint[];
+  reports: DmarcReportSummary[];
+}
+
+export interface TlsDomainStat {
+  domain: string;
+  reports: number;
+  success: number;
+  failures: number;
+  last_report_at: string | null;
+}
+
+export interface TlsReportSummary {
+  id: string;
+  domain: string;
+  org_name: string;
+  report_id: string;
+  date_begin: string | null;
+  date_end: string | null;
+  success: number;
+  failures: number;
+  failure_details: unknown[];
+}
+
+export interface TlsSummary {
+  object: "list";
+  days: number;
+  data: TlsDomainStat[];
+  reports: TlsReportSummary[];
+}
+
 // ── Members ───────────────────────────────────────────────────────────────
 
 export interface Member {
@@ -596,6 +663,26 @@ export const api = {
       method: "PUT",
       body: JSON.stringify(params),
     }),
+
+  // Deliverability reports
+  getDmarcSummary: (params?: { days?: number; domain?: string }) => {
+    const qs = new URLSearchParams();
+    if (params?.days) qs.set("days", String(params.days));
+    if (params?.domain) qs.set("domain", params.domain);
+    const search = qs.toString();
+    return fetchJson<DmarcSummary>(
+      `/api/v1/reports/dmarc${search ? `?${search}` : ""}`,
+    );
+  },
+  getTlsRptSummary: (params?: { days?: number; domain?: string }) => {
+    const qs = new URLSearchParams();
+    if (params?.days) qs.set("days", String(params.days));
+    if (params?.domain) qs.set("domain", params.domain);
+    const search = qs.toString();
+    return fetchJson<TlsSummary>(
+      `/api/v1/reports/tls-rpt${search ? `?${search}` : ""}`,
+    );
+  },
 
   // Webhooks
   listWebhooks: () =>

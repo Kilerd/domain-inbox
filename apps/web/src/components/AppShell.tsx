@@ -2,6 +2,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Link, useLocation } from "@tanstack/react-router";
 import {
   Activity,
+  BarChart3,
   FileText,
   Inbox,
   LogOut,
@@ -20,6 +21,7 @@ import { cn } from "@/lib/utils";
 const NAV = [
   { to: "/inbox", label: "Inbox", icon: Inbox },
   { to: "/activity", label: "Activity", icon: Activity },
+  { to: "/reports", label: "Reports", icon: BarChart3 },
   { to: "/templates", label: "Templates", icon: FileText },
   { to: "/suppressions", label: "Suppressions", icon: ShieldOff },
   { to: "/settings", label: "Settings", icon: Settings },

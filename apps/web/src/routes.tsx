@@ -90,6 +90,15 @@ const activityTabRoute = createRoute({
   },
 });
 
+const reportsRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: "/reports",
+  component: lazyRouteComponent(
+    () => import("@/screens/ReportsScreen"),
+    "ReportsScreen",
+  ),
+});
+
 const templatesRoute = createRoute({
   getParentRoute: () => rootRoute,
   path: "/templates",
@@ -132,6 +141,7 @@ const routeTree = rootRoute.addChildren([
   inboxRoute,
   activityIndexRoute,
   activityTabRoute,
+  reportsRoute,
   templatesRoute,
   suppressionsRoute,
   settingsIndexRoute,

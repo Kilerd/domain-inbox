@@ -18,6 +18,9 @@ const PREFIX = {
   suppression: "sup_",
   template: "tpl_",
   rule: "rul_",
+  dmarcReport: "dmr_",
+  dmarcRecord: "dmrec_",
+  tlsRpt: "tlsr_",
 } as const;
 
 type IdKind = keyof typeof PREFIX;
@@ -42,4 +45,7 @@ export const newId = {
   suppression: () => gen("suppression"),
   template: () => gen("template"),
   rule: () => gen("rule"),
+  dmarcReport: () => gen("dmarcReport"),
+  dmarcRecord: () => gen("dmarcRecord"),
+  tlsRpt: () => gen("tlsRpt"),
 };

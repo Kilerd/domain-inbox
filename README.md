@@ -20,6 +20,9 @@ web UI. A free Cloudflare account is enough to get started.
 - **Inbound automation.** Rules match sender/recipient/subject/attachment and
   apply star/archive/trash/spam/read. A per-owner vacation responder replies
   once per sender every three days, with loop/automation/suppression guards.
+- **Deliverability reports.** DMARC aggregate (XML) and TLS-RPT (JSON) reports
+  arriving at your domains are parsed into a dashboard — point `rua=` and the
+  `_smtp._tls` record at the inbox and the Reports screen fills itself.
 - **All on Cloudflare.** D1 for metadata, R2 for raw MIME, KV for fast token
   lookup. No external services.
 
