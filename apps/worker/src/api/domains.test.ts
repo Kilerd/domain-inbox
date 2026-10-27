@@ -129,6 +129,15 @@ describe("one-click domain onboarding", () => {
     expect(status).toBe(503);
   });
 
+  it("requires both the token and the worker name", async () => {
+    env = { ...env, CLOUDFLARE_API_TOKEN: "tok" };
+    expect((await post("/api/v1/domains/d_1/auto-configure")).status).toBe(503);
+    expect((await get("/api/v1/domains/capabilities")).body.auto_config).toEqual({
+      available: false,
+      worker_name: null,
+    });
+  });
+
   it("reports capability availability", async () => {
     expect((await get("/api/v1/domains/capabilities")).body.auto_config).toEqual({
       available: false,

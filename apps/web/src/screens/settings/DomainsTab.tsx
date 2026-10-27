@@ -81,6 +81,12 @@ export function DomainsTab() {
             deployment create the routing catch-all for you.
           </p>
         )}
+        {caps.isError && (
+          <p className="mt-2 text-xs text-amber-600 dark:text-amber-400">
+            Could not check one-click setup availability; the button stays
+            hidden until the capability check succeeds.
+          </p>
+        )}
       </Panel>
 
       <Panel
@@ -170,8 +176,8 @@ function DomainRow({
           {autoConfigAvailable && (
             <Button
               variant="secondary"
-              onClick={() => autoConfigMut.mutate()}
-              disabled={autoConfigMut.isPending}
+              onClick={() => autoConfigAvailable && autoConfigMut.mutate()}
+              disabled={!autoConfigAvailable || autoConfigMut.isPending}
               title="Create the Email Routing catch-all via the Cloudflare API"
             >
               <Wand2
