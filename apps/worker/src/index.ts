@@ -26,7 +26,7 @@ import { handleTemplates } from "./api/templates";
 import { handleClickRedirect, handleOpenPixel } from "./api/tracking";
 import { handleVacation } from "./api/vacation";
 import { handleWebhooks } from "./api/webhooks";
-import { authenticate } from "./auth";
+import { authenticate, type AuthUser } from "./auth";
 import { handleInboundEmail } from "./email/ingest";
 import { backfillSearchIndex } from "./email/search_index";
 import type { Env } from "./env";
@@ -203,7 +203,7 @@ async function tryBearer(
       url,
       req,
       env,
-      { id: k.auth.user_id, email: "", name: null, is_new: false },
+      { id: k.auth.user_id, user_id: k.auth.user_id, email: "", name: null, role: "member", is_new: false },
       ctx,
     );
   }
@@ -236,7 +236,7 @@ async function tryBearer(
       url,
       req,
       env,
-      { id: k.auth.user_id, email: "", name: null, is_new: false },
+      { id: k.auth.user_id, user_id: k.auth.user_id, email: "", name: null, role: "member", is_new: false },
       ctx,
     );
   }
@@ -296,12 +296,14 @@ async function tryUser(
   url: URL,
   req: Request,
   env: Env,
-  user: { id: string; email: string; name: string | null; is_new: boolean },
+  user: AuthUser,
   ctx: ExecutionContext,
 ): Promise<Response | null> {
   if (url.pathname === "/api/me") {
     return Response.json({
-      id: user.id,
+      id: user.user_id,
+      workspace_id: user.id,
+      role: user.role,
       email: user.email,
       name: user.name,
       is_new: user.is_new,

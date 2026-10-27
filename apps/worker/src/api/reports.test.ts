@@ -5,7 +5,7 @@ import type { Env } from "../env";
 import { d1, openDb } from "../test/sqlite";
 import { handleReports } from "./reports";
 
-const USER: AuthUser = { id: "u_1", email: "u@example.test", name: "U", is_new: false };
+const USER: AuthUser = { id: "u_1", user_id: "u_1", email: "u@example.test", name: "U", role: "owner", is_new: false };
 const NOW = Date.now();
 
 let db: DatabaseSyncType;

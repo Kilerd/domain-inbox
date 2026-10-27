@@ -16,7 +16,7 @@ import type { Env } from "../env";
 import { d1, openDb } from "../test/sqlite";
 import { handleInbox } from "./inbox";
 
-const USER: AuthUser = { id: "u_1", email: "u@example.test", name: "U", is_new: false };
+const USER: AuthUser = { id: "u_1", user_id: "u_1", email: "u@example.test", name: "U", role: "owner", is_new: false };
 
 let db: DatabaseSyncType;
 let env: Env;

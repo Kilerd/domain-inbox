@@ -20,9 +20,10 @@ interface UserRow {
 }
 
 async function ensureOwner(env: Env, user: AuthUser): Promise<Response | null> {
+  // user.id is the workspace owner; role checks must use the signed-in person.
   const row = await env.DB
     .prepare(`SELECT role FROM users WHERE id = ?1`)
-    .bind(user.id)
+    .bind(user.user_id)
     .first<{ role: string }>();
   if (row?.role !== "owner") {
     return httpError.forbidden("only owner can manage members");

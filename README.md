@@ -17,6 +17,9 @@ web UI. A free Cloudflare account is enough to get started.
 - **A Resend-compatible send API.** Point the official Resend SDK at your
   Worker via one env var — same idempotency, batch, GET/cancel, Svix-signed
   webhooks. Verified against the real Resend Node SDK.
+- **Shared team inbox.** Invite teammates from Settings → Members; every member
+  sees the same domains, threads, rules, templates and send quota. Member
+  management stays owner-only, while mail actions and replies are shared.
 - **Inbound automation.** Rules match sender/recipient/subject/attachment and
   apply star/archive/trash/spam/read. A per-owner vacation responder replies
   once per sender every three days, with loop/automation/suppression guards.
@@ -272,11 +275,11 @@ Cloudflare Email Routing / Sending setup notes, see [CHECKLIST.md](./CHECKLIST.m
   by the cron sweep with backoff (5m / 30m / 2h / 5h) and marked dead after
   5 attempts. Scheduled sends (`scheduled_at`) are executed by the same
   sweep, so both work without any external queue.
-- **Single-tenant today.** Rows are scoped by `owner_id`, so inviting a second
-  user currently shows them an empty inbox. Multi-tenant refactor is on the
-  roadmap before this is safe to host for multiple humans.
+- **One shared workspace.** Every account has a single owner and one shared set
+  of domains/mail; members join that workspace, and there are no per-domain
+  access lists yet. Host multiple independent teams as separate deployments.
 - **Cloudflare Free plan** limits Email Sending to *verified* destinations
   only. Workers Paid removes that limit. Inbound (Email Routing) has no such
   restriction on Free.
-- **No full-text message search yet.** Lookups today are by sender, subject
-  prefix, and thread; SQLite FTS5 over the corpus is planned.
+- **Search is SQLite FTS5**, backfilled in the background on ingest. Very new
+  messages may take a second to appear in search results.

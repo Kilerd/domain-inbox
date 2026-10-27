@@ -6,8 +6,8 @@ import type { Env } from "../env";
 import { d1, openDb } from "../test/sqlite";
 import { handlePush, sendPushToOwner } from "./push";
 
-const USER: AuthUser = { id: "u_1", email: "u@example.test", name: "U", is_new: false };
-const OTHER: AuthUser = { id: "u_2", email: "v@example.test", name: "V", is_new: false };
+const USER: AuthUser = { id: "u_1", user_id: "u_1", email: "u@example.test", name: "U", role: "owner", is_new: false };
+const OTHER: AuthUser = { id: "u_2", user_id: "u_2", email: "v@example.test", name: "V", role: "owner", is_new: false };
 
 let db: DatabaseSyncType;
 let env: Env;
@@ -22,24 +22,24 @@ function b64url(bytes: Uint8Array): string {
 
 /** A realistic browser subscription: uncompressed P-256 point + 16-byte auth. */
 async function browserKeys() {
-  const pair = await crypto.subtle.generateKey(
+  const pair = (await crypto.subtle.generateKey(
     { name: "ECDH", namedCurve: "P-256" },
     true,
     ["deriveBits"],
-  );
-  const raw = new Uint8Array(await crypto.subtle.exportKey("raw", pair.publicKey));
+  )) as CryptoKeyPair;
+  const raw = new Uint8Array((await crypto.subtle.exportKey("raw", pair.publicKey)) as ArrayBuffer);
   const auth = crypto.getRandomValues(new Uint8Array(16));
   return { p256dh: b64url(raw), auth: b64url(auth) };
 }
 
 async function vapidKeys() {
-  const pair = await crypto.subtle.generateKey(
+  const pair = (await crypto.subtle.generateKey(
     { name: "ECDSA", namedCurve: "P-256" },
     true,
     ["sign", "verify"],
-  );
-  const pub = new Uint8Array(await crypto.subtle.exportKey("raw", pair.publicKey));
-  const jwk = await crypto.subtle.exportKey("jwk", pair.privateKey);
+  )) as CryptoKeyPair;
+  const pub = new Uint8Array((await crypto.subtle.exportKey("raw", pair.publicKey)) as ArrayBuffer);
+  const jwk = (await crypto.subtle.exportKey("jwk", pair.privateKey)) as JsonWebKey;
   return { publicKey: b64url(pub), privateKey: jwk.d! };
 }
 

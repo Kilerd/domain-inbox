@@ -2,6 +2,8 @@
 
 export interface Me {
   id: string;
+  workspace_id: string;
+  role: "owner" | "member" | string;
   email: string;
   name: string | null;
   is_new: boolean;

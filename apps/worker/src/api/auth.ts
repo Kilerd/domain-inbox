@@ -109,15 +109,20 @@ async function getCallback(url: URL, req: Request, env: Env): Promise<Response> 
     .prepare(`SELECT id FROM users WHERE role = 'owner' LIMIT 1`)
     .first<{ id: string }>();
   const role = ownerRow ? "member" : "owner";
+  // Shared workspace: members' data scopes to the owner's user id.
+  const workspaceOwnerId = ownerRow?.id ?? userIdProposed;
 
   const inserted = await env.DB
     .prepare(
-      `INSERT INTO users (id, email, name, auth_provider, role, created_at, last_seen_at)
-       VALUES (?1, ?2, NULL, 'magic_link', ?3, ?4, ?4)
-       ON CONFLICT(email) DO UPDATE SET last_seen_at = excluded.last_seen_at
+      `INSERT INTO users
+         (id, email, name, auth_provider, role, workspace_owner_id, created_at, last_seen_at)
+       VALUES (?1, ?2, NULL, 'magic_link', ?3, ?4, ?5, ?5)
+       ON CONFLICT(email) DO UPDATE SET
+         last_seen_at = excluded.last_seen_at,
+         workspace_owner_id = COALESCE(users.workspace_owner_id, excluded.workspace_owner_id)
        RETURNING id, role`,
     )
-    .bind(userIdProposed, consumed.email, role, now)
+    .bind(userIdProposed, consumed.email, role, workspaceOwnerId, now)
     .first<{ id: string; role: string }>();
   if (!inserted) {
     return new Response(loginErrorHtml("Failed to provision user."), { status: 500 });

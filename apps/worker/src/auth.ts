@@ -5,9 +5,16 @@ import { newId } from "./ids";
 import { lookupSession, readSessionCookie } from "./auth/sessions";
 
 export interface AuthUser {
+  /**
+   * Data owner id. In a shared workspace this is the owner's user id, not the
+   * signed-in person: mail/domain/rules queries scope on it. Sessions and
+   * per-device rows use `user_id`.
+   */
   id: string;
+  user_id: string;
   email: string;
   name: string | null;
+  role: string;
   is_new: boolean;
 }
 
@@ -49,16 +56,29 @@ interface UserRow {
   id: string;
   email: string;
   name: string | null;
+  role: string;
+  workspace_id: string;
   created_at: number;
 }
 
 async function loadUser(env: Env, userId: string): Promise<AuthUser | null> {
   const row = await env.DB
-    .prepare(`SELECT id, email, name, created_at FROM users WHERE id = ?1`)
+    .prepare(
+      `SELECT id, email, name, role, COALESCE(workspace_owner_id, id) AS workspace_id,
+              created_at
+       FROM users WHERE id = ?1`,
+    )
     .bind(userId)
     .first<UserRow>();
   if (!row) return null;
-  return { id: row.id, email: row.email, name: row.name, is_new: false };
+  return {
+    id: row.workspace_id,
+    user_id: row.id,
+    email: row.email,
+    name: row.name,
+    role: row.role,
+    is_new: false,
+  };
 }
 
 async function provisionFromEmail(
@@ -69,20 +89,32 @@ async function provisionFromEmail(
 ): Promise<AuthUser | null> {
   const now = Date.now();
   const proposedId = newId.user();
+  const owner = await env.DB
+    .prepare(`SELECT id FROM users WHERE role = 'owner' ORDER BY created_at LIMIT 1`)
+    .first<{ id: string }>();
+  const role = owner ? "member" : "owner";
+  const workspaceId = owner?.id ?? proposedId;
   const row = await env.DB
     .prepare(
-      `INSERT INTO users (id, email, name, auth_provider, created_at, last_seen_at)
-       VALUES (?1, ?2, ?3, ?4, ?5, ?5)
-       ON CONFLICT(email) DO UPDATE SET last_seen_at = excluded.last_seen_at
-       RETURNING id, email, name, created_at`,
+      `INSERT INTO users
+         (id, email, name, auth_provider, role, workspace_owner_id, created_at, last_seen_at)
+       VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?7)
+       ON CONFLICT(email) DO UPDATE SET
+         last_seen_at = excluded.last_seen_at,
+         workspace_owner_id = COALESCE(users.workspace_owner_id, excluded.workspace_owner_id)
+       RETURNING id, email, name, role,
+                 COALESCE(workspace_owner_id, id) AS workspace_id,
+                 created_at`,
     )
-    .bind(proposedId, email.toLowerCase(), name, provider, now)
+    .bind(proposedId, email.toLowerCase(), name, provider, role, workspaceId, now)
     .first<UserRow>();
   if (!row) return null;
   return {
-    id: row.id,
+    id: row.workspace_id,
+    user_id: row.id,
     email: row.email,
     name: row.name,
+    role: row.role,
     is_new: row.created_at === now,
   };
 }

@@ -27,13 +27,8 @@ export function SettingsScreen() {
     ? (params.tab as Tab)
     : "domains";
 
-  // Owner-gated tabs: probe via the members endpoint, which 403s for non-owners.
-  const ownerProbe = useQuery({
-    queryKey: ["members-probe"],
-    queryFn: () => api.listMembers().then(() => true).catch(() => false),
-    staleTime: 5 * 60_000,
-  });
-  const isOwner = ownerProbe.data === true;
+  const me = useQuery({ queryKey: ["me"], queryFn: api.me });
+  const isOwner = me.data?.role === "owner";
   const visible = TABS.filter((t) => !t.ownerOnly || isOwner);
 
   return (
