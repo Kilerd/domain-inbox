@@ -6,6 +6,7 @@ import { FLAG_AUXILIARY } from "../utils/flags";
 import { tryProcessBounce } from "./bounce";
 import { parseAndEnrichMessage } from "./parse";
 import { applyInboundRules, authFailureSpam } from "./rules";
+import { indexMessageForSearch } from "./search_index";
 import { assignThread } from "./thread";
 import { maybeAutoReply } from "./vacation";
 import { fanoutEvent } from "../webhooks/dispatch";
@@ -201,6 +202,9 @@ export async function handleInboundEmail(
         )
         .bind(messageId, FLAG_AUXILIARY)
         .run();
+    } else {
+      // Index in the background: search can lag a second, ingest stays fast.
+      _ctx.waitUntil(indexMessageForSearch(env, messageId));
     }
 
     // One metadata read for the event, rules, vacation and alias counters.

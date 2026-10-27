@@ -127,6 +127,37 @@ describe("inbox is received mail only", () => {
   });
 });
 
+describe("full-text search", () => {
+  it("matches body text and combines it with operators", async () => {
+    db.prepare(
+      `UPDATE messages SET from_addr='alice@example.test', has_attachments=1
+       WHERE id='m_unread'`,
+    ).run();
+    db.prepare(
+      `INSERT INTO message_fts
+         (message_id, owner_id, thread_id, subject, body, from_addr, to_text)
+       VALUES ('m_unread','u_1','t_1','one','the quick brown fox',
+               'alice@example.test','hello@example.test')`,
+    ).run();
+
+    const q = async (search: string) => {
+      const { status, json } = await call(
+        `/api/inbox/threads?view=inbox&limit=10&q=${encodeURIComponent(search)}`,
+      );
+      expect(status).toBe(200);
+      return (json.threads as Array<{ id: string }>).map((t) => t.id).sort();
+    };
+
+    expect(await q("quick")).toEqual(["t_1"]);
+    expect(await q('"quick brown"')).toEqual(["t_1"]);
+    expect(await q("quick subject:m_unread")).toEqual(["t_1"]);
+    expect(await q("quick from:alice")).toEqual(["t_1"]);
+    expect(await q("quick has:attachment")).toEqual(["t_1"]);
+    expect(await q("quick is:unread")).toEqual(["t_1"]);
+    expect(await q("nonexistent")).toEqual([]);
+  });
+});
+
 describe("batch thread flags", () => {
   it("marks a chunk in one pass and recounts each thread", async () => {
     const { status, json } = await call("/api/inbox/threads/batch/flags", {

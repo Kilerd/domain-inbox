@@ -25,6 +25,7 @@ import { handleVacation } from "./api/vacation";
 import { handleWebhooks } from "./api/webhooks";
 import { authenticate } from "./auth";
 import { handleInboundEmail } from "./email/ingest";
+import { backfillSearchIndex } from "./email/search_index";
 import type { Env } from "./env";
 import { httpError } from "./http";
 import { log } from "./utils/log";
@@ -68,6 +69,8 @@ export default {
     // eviction mid-send) stays 'sending' forever; mark it failed so the
     // outbox/API can retry it and the activity view stops lying.
     ctx.waitUntil(run("stuck-sends", reapStuckSends(env)));
+    // Index old mail a small batch at a time; no-ops once caught up.
+    ctx.waitUntil(run("search-backfill", backfillSearchIndex(env, 20)));
   },
 } satisfies ExportedHandler<Env>;
 

@@ -19,6 +19,7 @@ import {
 import { suppressionHits } from "./suppressions";
 import { getTemplateById, renderTemplate } from "./templates";
 import { rewriteHtmlForTracking } from "./tracking";
+import { indexMessageForSearch } from "../email/search_index";
 import { assignThread } from "../email/thread";
 import type { Env } from "../env";
 import { httpError } from "../http";
@@ -600,6 +601,9 @@ async function executeSend(
       .run();
 
     await assignThread(env, messageId);
+    const searchIndex = indexMessageForSearch(env, messageId);
+    if (ctx) ctx.waitUntil(searchIndex);
+    else await searchIndex;
   }
 
   const sendEventId = newId.event();

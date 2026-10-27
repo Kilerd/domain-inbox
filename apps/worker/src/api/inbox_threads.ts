@@ -11,6 +11,7 @@ import {
   type MessageRow,
   type ThreadRow,
 } from "./inbox_shared";
+import { escapeLike, parseSearchQuery } from "./search";
 
 type View = "inbox" | "unread" | "starred" | "archived" | "trash" | "spam" | "sent" | "all";
 
@@ -92,14 +93,49 @@ export async function listThreads(url: URL, env: Env, user: AuthUser): Promise<R
     binds.push(alias);
   }
   if (q) {
-    // Escape LIKE metacharacters instead of stripping them — searching for
-    // "100%" should search for "100%", not "100".
-    const like = `%${q.replace(/[\\%_]/g, (c) => `\\${c}`)}%`;
-    where.push(
-      "EXISTS (SELECT 1 FROM messages m WHERE m.thread_id = t.id AND " +
-        "(m.subject LIKE ? ESCAPE '\\' OR m.snippet LIKE ? ESCAPE '\\' OR m.from_addr LIKE ? ESCAPE '\\'))",
-    );
-    binds.push(like, like, like);
+    const search = parseSearchQuery(q);
+    const conditions: string[] = ["m.thread_id = t.id", "m.owner_id = t.owner_id"];
+    const searchBinds: unknown[] = [];
+
+    if (search.fts) {
+      // FTS5 requires the table name (not the alias) on the left of MATCH.
+      conditions.push("message_fts MATCH ?");
+      searchBinds.push(search.fts);
+    }
+    if (search.from) {
+      conditions.push("m.from_addr LIKE ? ESCAPE '\\'");
+      searchBinds.push(`%${escapeLike(search.from)}%`);
+    }
+    if (search.to) {
+      conditions.push("m.to_json LIKE ? ESCAPE '\\'");
+      searchBinds.push(`%${escapeLike(search.to)}%`);
+    }
+    if (search.subject) {
+      conditions.push("m.subject LIKE ? ESCAPE '\\'");
+      searchBinds.push(`%${escapeLike(search.subject)}%`);
+    }
+    if (search.hasAttachment) conditions.push("m.has_attachments = 1");
+    if (search.after !== undefined) {
+      conditions.push("m.received_at >= ?");
+      searchBinds.push(search.after);
+    }
+    if (search.before !== undefined) {
+      conditions.push("m.received_at < ?");
+      searchBinds.push(search.before);
+    }
+
+    if (search.fts) {
+      where.push(
+        `EXISTS (SELECT 1 FROM message_fts f JOIN messages m ON m.id = f.message_id
+                 WHERE ${conditions.join(" AND ")})`,
+      );
+    } else if (conditions.length > 2) {
+      where.push(
+        `EXISTS (SELECT 1 FROM messages m WHERE ${conditions.join(" AND ")})`,
+      );
+    }
+    if (search.unreadOnly) where.push("t.unread_count > 0");
+    binds.push(...searchBinds);
   }
   binds.push(limit + 1);
 

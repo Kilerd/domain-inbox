@@ -28,7 +28,8 @@ export function SearchBar() {
         type="search"
         value={draft}
         onChange={(e) => setDraft(e.target.value)}
-        placeholder="Search subject / snippet / from"
+        placeholder="Search mail… try from:github has:attachment"
+        title="Full-text search. Operators: from: to: subject: has:attachment is:unread after:YYYY-MM-DD before:YYYY-MM-DD"
         className="block w-full rounded-md border border-zinc-200 bg-white py-1.5 pl-8 pr-8 text-base placeholder:text-zinc-400 focus:border-blue-500 focus:outline-none focus:ring-1 focus:ring-blue-500 dark:border-zinc-700 dark:bg-zinc-900 dark:text-zinc-100 dark:placeholder:text-zinc-500 sm:text-sm"
       />
       {draft && (
